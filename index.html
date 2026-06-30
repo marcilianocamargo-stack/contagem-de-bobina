@@ -280,25 +280,20 @@ select:focus, input:focus {
   <div class="card">
     <div class="step-title"><span class="step-num">+</span>Lançar Bobina</div>
 
-    <div class="grid2">
-      <div>
-        <label class="lbl">Cód. Fornecedor</label>
-        <input type="text" id="codFornecedor" placeholder="Ex: 26877" inputmode="numeric" autocomplete="off">
-      </div>
-      <div>
-        <label class="lbl">Fornecedor</label>
-        <input type="text" id="fornecedor" placeholder="Ex: Piquiri" autocomplete="off" list="listForn" oninput="aoDigitarFornecedor()">
-        <datalist id="listForn">
-          <option value="Piquiri">
-          <option value="Paraibuna">
-          <option value="HP">
-          <option value="Novacki">
-          <option value="Íris">
-          <option value="Klabin">
-          <option value="Suzano">
-        </datalist>
-      </div>
-    </div>
+    <label class="lbl" style="margin-top:0">Fornecedor</label>
+    <input type="text" id="fornecedor" placeholder="Ex: Piquiri" autocomplete="off" list="listForn" oninput="aoDigitarFornecedor()">
+    <datalist id="listForn">
+      <option value="Piquiri">
+      <option value="Paraibuna">
+      <option value="HP">
+      <option value="Novacki">
+      <option value="Íris">
+      <option value="Klabin">
+      <option value="Suzano">
+    </datalist>
+
+    <label class="lbl">Cód. Fornecedor</label>
+    <input type="text" id="codFornecedor" placeholder="Ex: 26877" inputmode="numeric" autocomplete="off">
 
     <div id="wrapTipo">
       <label class="lbl">Tipo</label>
@@ -373,8 +368,8 @@ if ('serviceWorker' in navigator) {
 const STORAGE_KEY = 'bobinas_estoque';
 let bobinas = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
 
-const campos = ['codFornecedor','fornecedor','tipo','formato','diametro','gramatura','peso'];
-const ordemTab = ['codFornecedor','fornecedor','tipo','formato','diametro','gramatura','peso'];
+const campos = ['fornecedor','codFornecedor','tipo','formato','diametro','gramatura','peso'];
+const ordemTab = ['fornecedor','codFornecedor','tipo','formato','diametro','gramatura','peso'];
 
 // Tab order entre campos
 ordemTab.forEach((id, i) => {
@@ -393,14 +388,18 @@ function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').re
 
 function aoDigitarFornecedor() {
   const forn = document.getElementById('fornecedor').value.trim().toLowerCase();
-  const wrapTipo = document.getElementById('wrapTipo');
-  const selTipo  = document.getElementById('tipo');
+  const wrapTipo  = document.getElementById('wrapTipo');
+  const selTipo   = document.getElementById('tipo');
+  const codInput  = document.getElementById('codFornecedor');
   if (forn === 'piquiri') {
     selTipo.value = 'Capa';
     wrapTipo.style.display = 'none';
+    codInput.inputMode = 'numeric';
+    codInput.placeholder = 'Ex: 26877';
   } else {
     wrapTipo.style.display = 'block';
-    if (selTipo.value === '') selTipo.value = '';
+    codInput.inputMode = 'text';
+    codInput.placeholder = 'Ex: AB1234';
   }
 }
 
