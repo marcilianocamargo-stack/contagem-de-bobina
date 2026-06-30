@@ -319,11 +319,20 @@ select:focus, input:focus {
       </div>
     </div>
 
-    <label class="lbl">Peso (kg)</label>
-    <input type="number" id="peso" placeholder="Ex: 950" inputmode="decimal" step="0.1" min="0.1"
-      onkeydown="if(event.key==='Enter'){salvarBobina();}">
+    <div class="grid2">
+      <div>
+        <label class="lbl">Peso (kg)</label>
+        <input type="number" id="peso" placeholder="Ex: 950" inputmode="decimal" step="0.1" min="0.1"
+          onkeydown="if(event.key==='Enter'){document.getElementById('quantidade').focus();document.getElementById('quantidade').select();}">
+      </div>
+      <div>
+        <label class="lbl">Quantidade</label>
+        <input type="number" id="quantidade" value="1" inputmode="numeric" min="1" step="1"
+          onkeydown="if(event.key==='Enter'){salvarBobina();}">
+      </div>
+    </div>
 
-    <button class="btn btn-verde" onclick="salvarBobina()">✓&nbsp;&nbsp;SALVAR BOBINA</button>
+    <button class="btn btn-verde" id="btnSalvar" onclick="salvarBobina()">✓&nbsp;&nbsp;SALVAR BOBINA</button>
     <div class="msg" id="msgBobina"></div>
   </div>
 
@@ -368,8 +377,8 @@ if ('serviceWorker' in navigator) {
 const STORAGE_KEY = 'bobinas_estoque';
 let bobinas = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
 
-const campos = ['fornecedor','codFornecedor','tipo','formato','diametro','gramatura','peso'];
-const ordemTab = ['fornecedor','codFornecedor','tipo','formato','diametro','gramatura','peso'];
+const campos = ['fornecedor','codFornecedor','tipo','formato','diametro','gramatura','peso','quantidade'];
+const ordemTab = ['fornecedor','codFornecedor','tipo','formato','diametro','gramatura','peso','quantidade'];
 
 // Tab order entre campos
 ordemTab.forEach((id, i) => {
@@ -411,6 +420,8 @@ function salvarBobina() {
   const diam  = document.getElementById('diametro').value.trim();
   const gram  = document.getElementById('gramatura').value.trim();
   const peso  = document.getElementById('peso').value.trim();
+  const qtdRaw = document.getElementById('quantidade').value.trim();
+  const qtd   = parseInt(qtdRaw) || 1;
 
   if (!forn)  { mostrarMsg('⚠ Informe o Fornecedor!', 'err');  document.getElementById('fornecedor').focus(); return; }
   if (!tipo)  { mostrarMsg('⚠ Selecione o Tipo!', 'err');      document.getElementById('tipo').focus(); return; }
@@ -418,23 +429,27 @@ function salvarBobina() {
   if (!diam)  { mostrarMsg('⚠ Informe o Diâmetro (mm)!', 'err'); document.getElementById('diametro').focus(); return; }
   if (!gram)  { mostrarMsg('⚠ Informe a Gramatura!', 'err');   document.getElementById('gramatura').focus(); return; }
   if (!peso || parseFloat(peso) <= 0) { mostrarMsg('⚠ Informe o Peso (kg)!', 'err'); document.getElementById('peso').focus(); return; }
+  if (!qtd || qtd < 1) { mostrarMsg('⚠ Quantidade inválida!', 'err'); document.getElementById('quantidade').focus(); return; }
 
-  const bobina = {
-    id: Date.now(),
-    codFornecedor: cod,
-    fornecedor: forn,
-    tipo,
-    formato: parseFloat(fmt_),
-    diametro: parseFloat(diam),
-    gramatura: parseFloat(gram),
-    peso: parseFloat(peso),
-  };
+  for (let i = 0; i < qtd; i++) {
+    bobinas.push({
+      id: Date.now() + i,
+      codFornecedor: cod,
+      fornecedor: forn,
+      tipo,
+      formato: parseFloat(fmt_),
+      diametro: parseFloat(diam),
+      gramatura: parseFloat(gram),
+      peso: parseFloat(peso),
+    });
+  }
 
-  bobinas.push(bobina);
   salvarLocal();
   limparFormulario();
   renderLista();
-  mostrarFlash('✓ Bobina Salva!\n' + forn + ' · ' + fmt(parseFloat(peso)) + ' kg');
+  mostrarFlash(qtd > 1
+    ? '✓ ' + qtd + ' Bobinas Salvas!\n' + forn + ' · ' + fmt(parseFloat(peso)) + ' kg cada'
+    : '✓ Bobina Salva!\n' + forn + ' · ' + fmt(parseFloat(peso)) + ' kg');
   setTimeout(() => document.getElementById('codFornecedor').focus(), 80);
 }
 
@@ -447,6 +462,7 @@ function limparFormulario() {
     const el = document.getElementById(id);
     el.value = '';
   });
+  document.getElementById('quantidade').value = '1';
   document.getElementById('wrapTipo').style.display = 'block';
   document.getElementById('msgBobina').style.display = 'none';
 }
