@@ -287,7 +287,7 @@ select:focus, input:focus {
       </div>
       <div>
         <label class="lbl">Fornecedor</label>
-        <input type="text" id="fornecedor" placeholder="Ex: Piquiri" autocomplete="off" list="listForn">
+        <input type="text" id="fornecedor" placeholder="Ex: Piquiri" autocomplete="off" list="listForn" oninput="aoDigitarFornecedor()">
         <datalist id="listForn">
           <option value="Piquiri">
           <option value="Paraibuna">
@@ -300,13 +300,14 @@ select:focus, input:focus {
       </div>
     </div>
 
-    <label class="lbl">Tipo</label>
-    <select id="tipo">
-      <option value="">— Selecione o tipo —</option>
-      <option value="Capa">Capa</option>
-      <option value="Miolo">Miolo</option>
-      <option value="Onda">Onda</option>
-    </select>
+    <div id="wrapTipo">
+      <label class="lbl">Tipo</label>
+      <select id="tipo">
+        <option value="">— Selecione o tipo —</option>
+        <option value="Capa">Capa</option>
+        <option value="Miolo">Miolo</option>
+      </select>
+    </div>
 
     <div class="grid3">
       <div>
@@ -390,6 +391,19 @@ ordemTab.forEach((id, i) => {
 function fmt(n) { return Number(n).toLocaleString('pt-BR', {maximumFractionDigits: 1}); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+function aoDigitarFornecedor() {
+  const forn = document.getElementById('fornecedor').value.trim().toLowerCase();
+  const wrapTipo = document.getElementById('wrapTipo');
+  const selTipo  = document.getElementById('tipo');
+  if (forn === 'piquiri') {
+    selTipo.value = 'Capa';
+    wrapTipo.style.display = 'none';
+  } else {
+    wrapTipo.style.display = 'block';
+    if (selTipo.value === '') selTipo.value = '';
+  }
+}
+
 function salvarBobina() {
   const cod   = document.getElementById('codFornecedor').value.trim();
   const forn  = document.getElementById('fornecedor').value.trim();
@@ -432,9 +446,9 @@ function salvarLocal() {
 function limparFormulario() {
   campos.forEach(id => {
     const el = document.getElementById(id);
-    if (el.tagName === 'SELECT') el.value = '';
-    else el.value = '';
+    el.value = '';
   });
+  document.getElementById('wrapTipo').style.display = 'block';
   document.getElementById('msgBobina').style.display = 'none';
 }
 
@@ -487,47 +501,107 @@ function gerarExcel() {
   if (bobinas.length === 0) return;
 
   const wb = XLSX.utils.book_new();
+  const dataHoje = new Date().toLocaleString('pt-BR');
+  const dataArq  = new Date().toLocaleDateString('pt-BR').replace(/\//g,'-');
 
-  const dados = [
+  // ── ABA 1: Estoque completo (todas as bobinas) ──
+  const dadosCompleto = [
     ['CONTAGEM DE ESTOQUE - BOBINAS'],
-    ['Gerado em: ' + new Date().toLocaleString('pt-BR')],
+    ['Gerado em: ' + dataHoje],
     ['Total de bobinas: ' + bobinas.length],
     [],
-    ['Cód. Fornecedor', 'Fornecedor', 'Tipo', 'Formato (mm)', 'Diâmetro (mm)', 'Gramatura (g/m²)', 'Peso (kg)'],
-    ...bobinas.map(b => [
-      b.codFornecedor, b.fornecedor, b.tipo, b.formato, b.diametro, b.gramatura, b.peso
-    ])
+    ['Cód. Fornecedor','Fornecedor','Tipo','Formato (mm)','Diâmetro (mm)','Gramatura (g/m²)','Peso (kg)'],
+    ...bobinas.map(b => [b.codFornecedor, b.fornecedor, b.tipo, b.formato, b.diametro, b.gramatura, b.peso]),
+    [],
+    ['','','','','','TOTAL PESO (kg):', bobinas.reduce((s,b) => s + b.peso, 0)]
+  ];
+  const wsCompleto = XLSX.utils.aoa_to_sheet(dadosCompleto);
+  wsCompleto['!cols'] = [{wch:18},{wch:20},{wch:10},{wch:14},{wch:14},{wch:18},{wch:12}];
+  XLSX.utils.book_append_sheet(wb, wsCompleto, 'Estoque');
+
+  // ── ABA 2: Separado por Fornecedor › Tipo › Formato › Gramatura ──
+  // Agrupa na ordem: fornecedor → tipo → formato → gramatura
+  const grupos = {};
+  bobinas.forEach(b => {
+    const chave = `${b.fornecedor}||${b.tipo}||${b.formato}||${b.gramatura}`;
+    if (!grupos[chave]) grupos[chave] = {
+      codFornecedor: b.codFornecedor,
+      fornecedor: b.fornecedor,
+      tipo: b.tipo,
+      formato: b.formato,
+      gramatura: b.gramatura,
+      bobinas: []
+    };
+    grupos[chave].bobinas.push(b);
+  });
+
+  // Ordena: fornecedor A-Z → tipo A-Z → formato ↑ → gramatura ↑
+  const gruposOrdenados = Object.values(grupos).sort((a, b) => {
+    if (a.fornecedor !== b.fornecedor) return a.fornecedor.localeCompare(b.fornecedor);
+    if (a.tipo !== b.tipo)             return a.tipo.localeCompare(b.tipo);
+    if (a.formato !== b.formato)       return a.formato - b.formato;
+    return a.gramatura - b.gramatura;
+  });
+
+  const dadosAgrup = [
+    ['ESTOQUE AGRUPADO - BOBINAS'],
+    ['Gerado em: ' + dataHoje],
+    []
   ];
 
-  // Totalizador
-  const totalPeso = bobinas.reduce((s, b) => s + b.peso, 0);
-  dados.push([]);
-  dados.push(['', '', '', '', '', 'TOTAL PESO (kg):', totalPeso]);
+  let fornAtual = null, tipoAtual = null;
+  gruposOrdenados.forEach(g => {
+    // Cabeçalho de fornecedor
+    if (g.fornecedor !== fornAtual) {
+      dadosAgrup.push([]);
+      dadosAgrup.push(['▶ FORNECEDOR: ' + g.fornecedor + (g.codFornecedor ? '  (Cód: ' + g.codFornecedor + ')' : '')]);
+      fornAtual = g.fornecedor;
+      tipoAtual = null;
+    }
+    // Cabeçalho de tipo
+    if (g.tipo !== tipoAtual) {
+      dadosAgrup.push(['', '● ' + g.tipo]);
+      tipoAtual = g.tipo;
+    }
+    // Cabeçalho do grupo formato + gramatura
+    const totalGrupo = g.bobinas.reduce((s, b) => s + b.peso, 0);
+    dadosAgrup.push(['', '', 'Formato: ' + g.formato + ' mm  |  Gramatura: ' + g.gramatura + ' g/m²  |  Qtd: ' + g.bobinas.length + ' bobina(s)  |  Peso total: ' + totalGrupo.toLocaleString('pt-BR', {maximumFractionDigits:1}) + ' kg']);
+    // Linha de cabeçalho das bobinas
+    dadosAgrup.push(['','','','Diâmetro (mm)','Peso (kg)']);
+    // Cada bobina do grupo
+    g.bobinas.forEach(b => {
+      dadosAgrup.push(['','','', b.diametro, b.peso]);
+    });
+  });
 
-  const ws = XLSX.utils.aoa_to_sheet(dados);
-  ws['!cols'] = [{wch:18},{wch:20},{wch:12},{wch:14},{wch:14},{wch:18},{wch:12}];
-  XLSX.utils.book_append_sheet(wb, ws, 'Estoque');
+  // Total geral no final
+  const totalGeralPeso = bobinas.reduce((s,b) => s + b.peso, 0);
+  dadosAgrup.push([]);
+  dadosAgrup.push(['TOTAL GERAL','','', bobinas.length + ' bobinas', totalGeralPeso]);
 
-  // Aba de resumo por fornecedor
+  const wsAgrup = XLSX.utils.aoa_to_sheet(dadosAgrup);
+  wsAgrup['!cols'] = [{wch:8},{wch:14},{wch:52},{wch:16},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, wsAgrup, 'Agrupado');
+
+  // ── ABA 3: Resumo por fornecedor ──
   const porForn = {};
   bobinas.forEach(b => {
-    const k = (b.codFornecedor || '') + '|' + b.fornecedor;
+    const k = b.fornecedor;
     if (!porForn[k]) porForn[k] = { cod: b.codFornecedor, forn: b.fornecedor, qtd: 0, peso: 0 };
     porForn[k].qtd++;
     porForn[k].peso += b.peso;
   });
-
   const resumo = [
     ['RESUMO POR FORNECEDOR'], [],
-    ['Cód. Fornecedor', 'Fornecedor', 'Qtd. Bobinas', 'Peso Total (kg)'],
-    ...Object.values(porForn).map(r => [r.cod, r.forn, r.qtd, r.peso])
+    ['Cód. Fornecedor','Fornecedor','Qtd. Bobinas','Peso Total (kg)'],
+    ...Object.values(porForn).sort((a,b) => a.forn.localeCompare(b.forn))
+      .map(r => [r.cod, r.forn, r.qtd, r.peso])
   ];
   const wsRes = XLSX.utils.aoa_to_sheet(resumo);
   wsRes['!cols'] = [{wch:18},{wch:22},{wch:16},{wch:18}];
   XLSX.utils.book_append_sheet(wb, wsRes, 'Resumo');
 
-  const data = new Date().toLocaleDateString('pt-BR').replace(/\//g,'-');
-  XLSX.writeFile(wb, 'Estoque_Bobinas_' + data + '.xlsx');
+  XLSX.writeFile(wb, 'Estoque_Bobinas_' + dataArq + '.xlsx');
 }
 
 function mostrarMsg(txt, tipo) {
