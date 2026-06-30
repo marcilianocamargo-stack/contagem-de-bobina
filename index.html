@@ -359,7 +359,9 @@ select:focus, input:focus {
     <button class="btn btn-vermelho" onclick="limparTudo()">🗑&nbsp;&nbsp;LIMPAR TUDO</button>
   </div>
 
-  <div class="footer">Contagem de Bobinas · Estoque</div>
+  <button class="btn btn-cinza" onclick="verificarAtualizacao()" style="max-width:620px;margin:0 auto 16px;display:block">🔄&nbsp;&nbsp;Verificar Atualização</button>
+
+  <div class="footer">Contagem de Bobinas · Estoque<br><span id="versaoApp" style="font-size:12px"></span></div>
 </div>
 
 <div class="flash-overlay" id="flashOverlay">
@@ -368,9 +370,47 @@ select:focus, input:focus {
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
+const APP_VERSION = 'v5';
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('versaoApp');
+  if (el) el.textContent = 'Versão ' + APP_VERSION;
+});
+
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker.register('./sw.js').then(reg => {
+      // Verifica atualização automaticamente ao abrir
+      reg.update();
+
+      reg.addEventListener('updatefound', () => {
+        const novoSW = reg.installing;
+        novoSW.addEventListener('statechange', () => {
+          if (novoSW.state === 'installed' && navigator.serviceWorker.controller) {
+            mostrarFlash('🔄 Nova versão instalada!\nRecarregando...');
+            setTimeout(() => window.location.reload(), 1500);
+          }
+        });
+      });
+    }).catch(() => {});
+  });
+}
+
+function verificarAtualizacao() {
+  if (!('serviceWorker' in navigator)) {
+    mostrarFlash('Service worker não suportado neste navegador.');
+    return;
+  }
+  navigator.serviceWorker.getRegistration().then(reg => {
+    if (!reg) { window.location.reload(); return; }
+    mostrarFlash('🔍 Verificando atualização...');
+    reg.update().then(() => {
+      setTimeout(() => {
+        // Se não houve updatefound, está na versão mais recente
+        if (!reg.installing && !reg.waiting) {
+          mostrarFlash('✓ Você já está na versão mais recente!');
+        }
+      }, 1200);
+    });
   });
 }
 
