@@ -370,7 +370,7 @@ select:focus, input:focus {
 
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script>
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -740,6 +740,99 @@ async function gerarExcel() {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_PRETO } };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
     });
+  });
+
+  // ── Última aba: Resumo geral de TODAS as bobinas por Formato + Gramatura + Tipo ──
+  const wsResumo = wb.addWorksheet('Resumo');
+  wsResumo.columns = [{ width: 10 }, { width: 14 }, { width: 16 }, { width: 14 }, { width: 16 }, { width: 12 }];
+
+  wsResumo.mergeCells('A1:F1');
+  wsResumo.getRow(1).height = 24;
+  const tituloResumo = wsResumo.getCell('A1');
+  tituloResumo.value = 'ESTOQUE POR FORMATO + GRAMATURA + TIPO';
+  tituloResumo.font = { bold: true, size: 12, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+  tituloResumo.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_NAVY } };
+  tituloResumo.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  const hdrResumo = wsResumo.getRow(2);
+  hdrResumo.height = 20;
+  ['Tipo', 'Formato (mm)', 'Gramatura (g/m²)', 'Qtd Bobinas', 'Peso Total (kg)', '% do Total'].forEach((txt, idx) => {
+    const cell = hdrResumo.getCell(idx + 1);
+    cell.value = txt;
+    cell.font = { bold: true, size: 9, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_CAPA } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = { top: BORDA_CINZA, bottom: BORDA_CINZA, left: BORDA_CINZA, right: BORDA_CINZA };
+  });
+
+  let linhaResumo = 3;
+  const pesoTotalGeral = bobinas.reduce((s, b) => s + b.peso, 0);
+  const qtdTotalGeral = bobinas.length;
+
+  const tiposGerais = [...new Set(bobinas.map(b => b.tipo))].sort((a, b) => {
+    const ia = ordemTipo.indexOf(a), ib = ordemTipo.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  tiposGerais.forEach((tipo, ti) => {
+    const corDivisor = tipo === 'Miolo' ? COR_MIOLO : COR_CAPA;
+
+    wsResumo.mergeCells(`A${linhaResumo}:F${linhaResumo}`);
+    wsResumo.getRow(linhaResumo).height = 18;
+    const div = wsResumo.getCell(`A${linhaResumo}`);
+    div.value = '  ' + tipo.toUpperCase();
+    div.font = { bold: true, size: 10, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    div.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: corDivisor } };
+    div.alignment = { horizontal: 'left', vertical: 'middle' };
+    linhaResumo++;
+
+    const grupos = {};
+    bobinas.filter(b => b.tipo === tipo).forEach(b => {
+      const chave = b.formato + '|' + b.gramatura;
+      if (!grupos[chave]) grupos[chave] = { formato: b.formato, gramatura: b.gramatura, peso: 0, qtd: 0 };
+      grupos[chave].peso += b.peso;
+      grupos[chave].qtd += 1;
+    });
+    const gruposOrdenados = Object.values(grupos).sort((a, b) => a.formato - b.formato || a.gramatura - b.gramatura);
+
+    gruposOrdenados.forEach((g, i) => {
+      const faixa = (i % 2 === 0) ? 'FFD6E3F4' : 'FFBDD6EE';
+      const row = wsResumo.getRow(linhaResumo);
+      row.height = 18;
+      const pct = pesoTotalGeral > 0 ? g.peso / pesoTotalGeral : 0;
+      [tipo, g.formato, g.gramatura, g.qtd, g.peso, pct].forEach((v, idx) => {
+        const cell = row.getCell(idx + 1);
+        cell.value = v;
+        cell.font = { size: 10, name: 'Arial', color: { argb: 'FF000000' }, bold: idx === 3 };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: faixa } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = { top: BORDA_CINZA, bottom: BORDA_CINZA, left: BORDA_CINZA, right: BORDA_CINZA };
+        if (idx === 4) cell.numFmt = '#,##0';
+        if (idx === 5) cell.numFmt = '0.0%';
+      });
+      linhaResumo++;
+    });
+  });
+
+  wsResumo.mergeCells(`A${linhaResumo}:C${linhaResumo}`);
+  wsResumo.getRow(linhaResumo).height = 19.5;
+  const totalGeralLabel = wsResumo.getCell(`A${linhaResumo}`);
+  totalGeralLabel.value = 'TOTAL GERAL';
+  const totalGeralQtd = wsResumo.getCell(`D${linhaResumo}`);
+  totalGeralQtd.value = qtdTotalGeral;
+  const totalGeralPeso = wsResumo.getCell(`E${linhaResumo}`);
+  totalGeralPeso.value = pesoTotalGeral;
+  totalGeralPeso.numFmt = '#,##0';
+  const totalGeralPct = wsResumo.getCell(`F${linhaResumo}`);
+  totalGeralPct.value = pesoTotalGeral > 0 ? 1 : 0;
+  totalGeralPct.numFmt = '0.0%';
+  [totalGeralLabel, totalGeralQtd, totalGeralPeso, totalGeralPct].forEach(cell => {
+    cell.font = { bold: true, size: 11, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_PRETO } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
   });
 
   const buffer = await wb.xlsx.writeBuffer();
