@@ -455,10 +455,10 @@ select:focus, input:focus {
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v8';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -649,111 +649,300 @@ function renderLista() {
   `).join('');
 }
 
-function gerarExcel() {
+// Cores e bordas no mesmo padrão do modelo "Controle Estoque"
+const COR_NAVY   = 'FF17375E';
+const COR_PRETO  = 'FF000000';
+const COR_CAPA   = 'FF1F5C8B';
+const COR_MIOLO  = 'FF375623';
+const COR_FAIXA1 = 'FFDCE6F1';
+const COR_FAIXA2 = 'FFFFFFFF';
+const COR_ZEBRA  = 'FFD6E4F0';
+const BORDA_CINZA = { style: 'thin', color: { argb: 'FFAAAAAA' } };
+const BORDA_PRETA = { style: 'thin', color: { argb: 'FF000000' } };
+
+function nomeAba(fornecedor, usados) {
+  let base = fornecedor.toUpperCase().replace(/[\\\/\?\*\[\]:]/g, '').substring(0, 28).trim() || 'FORNECEDOR';
+  let nome = base, n = 2;
+  while (usados.has(nome)) { nome = (base + ' ' + n).substring(0, 31); n++; }
+  usados.add(nome);
+  return nome;
+}
+
+async function gerarExcel() {
   if (bobinas.length === 0) return;
 
-  const wb = XLSX.utils.book_new();
-  const dataHoje = new Date().toLocaleString('pt-BR');
-  const dataArq  = new Date().toLocaleDateString('pt-BR').replace(/\//g,'-');
+  const wb = new ExcelJS.Workbook();
+  const dataArq = new Date().toLocaleDateString('pt-BR').replace(/\//g,'-');
 
-  // ── ABA 1: Estoque completo (todas as bobinas) ──
-  const dadosCompleto = [
-    ['CONTAGEM DE ESTOQUE - BOBINAS'],
-    ['Gerado em: ' + dataHoje],
-    ['Total de bobinas: ' + bobinas.length],
-    [],
-    ['Nota Fiscal','Cód. Fornecedor','Fornecedor','Tipo','Formato (mm)','Diâmetro (mm)','Gramatura (g/m²)','Peso (kg)'],
-    ...bobinas.map(b => [b.notaFiscal || '', b.codFornecedor, b.fornecedor, b.tipo, b.formato, b.diametro, b.gramatura, b.peso]),
-    [],
-    ['','','','','','','TOTAL PESO (kg):', bobinas.reduce((s,b) => s + (b.peso || 0), 0)]
+  // ── ABA "Estoque": lista completa, igual ao modelo ──
+  const wsEst = wb.addWorksheet('Estoque', { views: [{ state: 'frozen', ySplit: 1 }] });
+  wsEst.columns = [
+    { header: 'Nota Fiscal', width: 14 },
+    { header: 'Cód. Fornecedor', width: 18 },
+    { header: 'Fornecedor', width: 14 },
+    { header: 'Tipo', width: 10 },
+    { header: 'Formato (mm)', width: 14 },
+    { header: 'Diâmetro (mm)', width: 14 },
+    { header: 'Gramatura (g/m²)', width: 16 },
+    { header: 'Peso (kg)', width: 12 },
   ];
-  const wsCompleto = XLSX.utils.aoa_to_sheet(dadosCompleto);
-  wsCompleto['!cols'] = [{wch:14},{wch:18},{wch:20},{wch:10},{wch:14},{wch:14},{wch:18},{wch:12}];
-  XLSX.utils.book_append_sheet(wb, wsCompleto, 'Estoque');
-
-  // ── ABA 2: Separado por Fornecedor › Tipo › Formato › Gramatura ──
-  // Agrupa na ordem: fornecedor → tipo → formato → gramatura
-  const grupos = {};
-  bobinas.forEach(b => {
-    const chave = `${b.fornecedor}||${b.tipo}||${b.formato}||${b.gramatura}`;
-    if (!grupos[chave]) grupos[chave] = {
-      codFornecedor: b.codFornecedor,
-      fornecedor: b.fornecedor,
-      tipo: b.tipo,
-      formato: b.formato,
-      gramatura: b.gramatura,
-      bobinas: []
-    };
-    grupos[chave].bobinas.push(b);
+  const headerEst = wsEst.getRow(1);
+  headerEst.height = 30;
+  headerEst.eachCell(cell => {
+    cell.font = { bold: true, size: 10, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_NAVY } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    cell.border = { top: BORDA_CINZA, bottom: BORDA_CINZA, left: BORDA_CINZA, right: BORDA_CINZA };
   });
 
-  // Ordena: fornecedor A-Z → tipo A-Z → formato ↑ → gramatura ↑
-  const gruposOrdenados = Object.values(grupos).sort((a, b) => {
-    if (a.fornecedor !== b.fornecedor) return a.fornecedor.localeCompare(b.fornecedor);
-    if (a.tipo !== b.tipo)             return a.tipo.localeCompare(b.tipo);
-    if (a.formato !== b.formato)       return a.formato - b.formato;
-    return a.gramatura - b.gramatura;
-  });
-
-  const dadosAgrup = [
-    ['ESTOQUE AGRUPADO - BOBINAS'],
-    ['Gerado em: ' + dataHoje],
-    []
-  ];
-
-  let fornAtual = null, tipoAtual = null;
-  gruposOrdenados.forEach(g => {
-    // Cabeçalho de fornecedor
-    if (g.fornecedor !== fornAtual) {
-      dadosAgrup.push([]);
-      dadosAgrup.push(['▶ FORNECEDOR: ' + g.fornecedor + (g.codFornecedor ? '  (Cód: ' + g.codFornecedor + ')' : '')]);
-      fornAtual = g.fornecedor;
-      tipoAtual = null;
-    }
-    // Cabeçalho de tipo
-    if (g.tipo !== tipoAtual) {
-      dadosAgrup.push(['', '● ' + g.tipo]);
-      tipoAtual = g.tipo;
-    }
-    // Cabeçalho do grupo formato + gramatura
-    const totalGrupo = g.bobinas.reduce((s, b) => s + (b.peso || 0), 0);
-    dadosAgrup.push(['', '', 'Formato: ' + g.formato + ' mm  |  Gramatura: ' + g.gramatura + ' g/m²  |  Qtd: ' + g.bobinas.length + ' bobina(s)  |  Peso total: ' + totalGrupo.toLocaleString('pt-BR', {maximumFractionDigits:1}) + ' kg']);
-    // Linha de cabeçalho das bobinas
-    dadosAgrup.push(['','','','Nota Fiscal','Diâmetro (mm)','Peso (kg)']);
-    // Cada bobina do grupo
-    g.bobinas.forEach(b => {
-      dadosAgrup.push(['','','', b.notaFiscal || '', b.diametro, b.peso]);
+  bobinas.forEach((b, i) => {
+    const row = wsEst.addRow([b.notaFiscal || '', b.codFornecedor, b.fornecedor, b.tipo, b.formato, b.diametro, b.gramatura, b.peso]);
+    const faixa = (i % 2 === 1) ? COR_ZEBRA : null;
+    row.eachCell(cell => {
+      cell.font = { size: 10, name: 'Arial', color: { argb: 'FF000000' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = { top: BORDA_PRETA, bottom: BORDA_PRETA, left: BORDA_PRETA, right: BORDA_PRETA };
+      if (faixa) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: faixa } };
     });
   });
 
-  // Total geral no final
-  const totalGeralPeso = bobinas.reduce((s,b) => s + (b.peso || 0), 0);
-  dadosAgrup.push([]);
-  dadosAgrup.push(['TOTAL GERAL','','','', bobinas.length + ' bobinas', totalGeralPeso]);
-
-  const wsAgrup = XLSX.utils.aoa_to_sheet(dadosAgrup);
-  wsAgrup['!cols'] = [{wch:8},{wch:14},{wch:52},{wch:14},{wch:16},{wch:14}];
-  XLSX.utils.book_append_sheet(wb, wsAgrup, 'Agrupado');
-
-  // ── ABA 3: Resumo por fornecedor ──
+  // ── Uma aba por fornecedor: resumo Tipo + Gramatura + Formato, igual ao modelo ──
   const porForn = {};
   bobinas.forEach(b => {
-    const k = b.fornecedor;
-    if (!porForn[k]) porForn[k] = { cod: b.codFornecedor, forn: b.fornecedor, qtd: 0, peso: 0 };
-    porForn[k].qtd++;
-    porForn[k].peso += (b.peso || 0);
+    if (!porForn[b.fornecedor]) porForn[b.fornecedor] = [];
+    porForn[b.fornecedor].push(b);
   });
-  const resumo = [
-    ['RESUMO POR FORNECEDOR'], [],
-    ['Cód. Fornecedor','Fornecedor','Qtd. Bobinas','Peso Total (kg)'],
-    ...Object.values(porForn).sort((a,b) => a.forn.localeCompare(b.forn))
-      .map(r => [r.cod, r.forn, r.qtd, r.peso])
-  ];
-  const wsRes = XLSX.utils.aoa_to_sheet(resumo);
-  wsRes['!cols'] = [{wch:18},{wch:22},{wch:16},{wch:18}];
-  XLSX.utils.book_append_sheet(wb, wsRes, 'Resumo');
 
-  XLSX.writeFile(wb, 'Estoque_Bobinas_' + dataArq + '.xlsx');
+  const abasUsadas = new Set(['ESTOQUE']);
+  const ordemTipo = ['Capa', 'Miolo'];
+
+  Object.keys(porForn).sort((a, b) => a.localeCompare(b)).forEach(fornecedor => {
+    const itens = porForn[fornecedor];
+    const ws = wb.addWorksheet(nomeAba(fornecedor, abasUsadas));
+    ws.columns = [{ width: 14.7 }, { width: 9.7 }, { width: 10.7 }, { width: 18.7 }, { width: 14.7 }];
+
+    // Título do fornecedor
+    ws.mergeCells('A1:E1');
+    ws.getRow(1).height = 24.75;
+    const titulo = ws.getCell('A1');
+    titulo.value = 'FORNECEDOR: ' + fornecedor.toUpperCase();
+    titulo.font = { bold: true, size: 13, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    titulo.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_PRETO } };
+    titulo.alignment = { horizontal: 'center', vertical: 'middle' };
+    ['A1','B1','C1','D1','E1'].forEach(ref => ws.getCell(ref).border = { top: BORDA_CINZA, bottom: BORDA_CINZA });
+
+    let linha = 3;
+    let totalGeralPeso = 0, totalGeralQtd = 0;
+
+    const tiposPresentes = [...new Set(itens.map(b => b.tipo))].sort((a, b) => {
+      const ia = ordemTipo.indexOf(a), ib = ordemTipo.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+
+    tiposPresentes.forEach(tipo => {
+      // Agrupa por gramatura + formato
+      const grupos = {};
+      itens.filter(b => b.tipo === tipo).forEach(b => {
+        const chave = b.gramatura + '|' + b.formato;
+        if (!grupos[chave]) grupos[chave] = { gramatura: b.gramatura, formato: b.formato, peso: 0, qtd: 0 };
+        grupos[chave].peso += (b.peso || 0);
+        grupos[chave].qtd += 1;
+      });
+      const gruposOrdenados = Object.values(grupos).sort((a, b) => a.gramatura - b.gramatura || a.formato - b.formato);
+      const corSubtitulo = tipo === 'Miolo' ? COR_MIOLO : COR_CAPA;
+
+      // Subtítulo do tipo
+      ws.mergeCells(`A${linha}:E${linha}`);
+      ws.getRow(linha).height = 19.5;
+      const sub = ws.getCell(`A${linha}`);
+      sub.value = '[x]  Resumo: Tipo + Gramatura + Formato  --  ' + tipo.toUpperCase();
+      sub.font = { bold: true, size: 11, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+      sub.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: corSubtitulo } };
+      sub.alignment = { horizontal: 'left', vertical: 'middle' };
+      linha++;
+
+      // Cabeçalho da tabela
+      const hdr = ws.getRow(linha);
+      hdr.height = 18;
+      ['Tipo', 'G/M2', 'Formato', 'Peso total (kg)', 'Qtd. bobinas'].forEach((txt, idx) => {
+        const cell = hdr.getCell(idx + 1);
+        cell.value = txt;
+        cell.font = { bold: true, size: 10, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_NAVY } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = { top: BORDA_CINZA, bottom: BORDA_CINZA, left: BORDA_CINZA, right: BORDA_CINZA };
+      });
+      linha++;
+
+      let subtotalPeso = 0, subtotalQtd = 0;
+      gruposOrdenados.forEach((g, i) => {
+        const faixa = (i % 2 === 0) ? COR_FAIXA1 : COR_FAIXA2;
+        const row = ws.getRow(linha);
+        row.height = 15.75;
+        [tipo, g.gramatura, g.formato, g.peso, g.qtd].forEach((v, idx) => {
+          const cell = row.getCell(idx + 1);
+          cell.value = v;
+          cell.font = { size: 10, name: 'Arial', color: { argb: 'FF000000' }, bold: idx === 4 };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: faixa } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          cell.border = { top: BORDA_CINZA, bottom: BORDA_CINZA, left: BORDA_CINZA, right: BORDA_CINZA };
+          if (idx === 3) cell.numFmt = '#,##0';
+        });
+        subtotalPeso += g.peso;
+        subtotalQtd += g.qtd;
+        linha++;
+      });
+
+      // Total do tipo
+      ws.mergeCells(`A${linha}:C${linha}`);
+      ws.getRow(linha).height = 18;
+      const totLabel = ws.getCell(`A${linha}`);
+      totLabel.value = tipo.toUpperCase() + '   TOTAL';
+      totLabel.font = { bold: true, size: 10, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+      totLabel.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_NAVY } };
+      totLabel.alignment = { horizontal: 'center', vertical: 'middle' };
+      const totPeso = ws.getCell(`D${linha}`);
+      totPeso.value = subtotalPeso;
+      totPeso.numFmt = '#,##0';
+      const totQtd = ws.getCell(`E${linha}`);
+      totQtd.value = subtotalQtd;
+      [totPeso, totQtd].forEach(cell => {
+        cell.font = { bold: true, size: 10, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_NAVY } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+      linha += 2;
+
+      totalGeralPeso += subtotalPeso;
+      totalGeralQtd += subtotalQtd;
+    });
+
+    // Total geral do fornecedor
+    ws.mergeCells(`A${linha}:C${linha}`);
+    ws.getRow(linha).height = 19.5;
+    const gLabel = ws.getCell(`A${linha}`);
+    gLabel.value = 'GERAL   TOTAL';
+    gLabel.font = { bold: true, size: 11, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    gLabel.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_PRETO } };
+    gLabel.alignment = { horizontal: 'center', vertical: 'middle' };
+    const gPeso = ws.getCell(`D${linha}`);
+    gPeso.value = totalGeralPeso;
+    gPeso.numFmt = '#,##0';
+    const gQtd = ws.getCell(`E${linha}`);
+    gQtd.value = totalGeralQtd;
+    [gPeso, gQtd].forEach(cell => {
+      cell.font = { bold: true, size: 11, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_PRETO } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+  });
+
+  // ── Última aba: Resumo geral de TODAS as bobinas por Formato + Gramatura + Tipo ──
+  const wsResumo = wb.addWorksheet('Resumo');
+  wsResumo.columns = [{ width: 10 }, { width: 14 }, { width: 16 }, { width: 14 }, { width: 16 }, { width: 12 }];
+
+  wsResumo.mergeCells('A1:F1');
+  wsResumo.getRow(1).height = 24;
+  const tituloResumo = wsResumo.getCell('A1');
+  tituloResumo.value = 'ESTOQUE POR FORMATO + GRAMATURA + TIPO';
+  tituloResumo.font = { bold: true, size: 12, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+  tituloResumo.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_NAVY } };
+  tituloResumo.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  const hdrResumo = wsResumo.getRow(2);
+  hdrResumo.height = 20;
+  ['Tipo', 'Formato (mm)', 'Gramatura (g/m²)', 'Qtd Bobinas', 'Peso Total (kg)', '% do Total'].forEach((txt, idx) => {
+    const cell = hdrResumo.getCell(idx + 1);
+    cell.value = txt;
+    cell.font = { bold: true, size: 9, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_CAPA } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = { top: BORDA_CINZA, bottom: BORDA_CINZA, left: BORDA_CINZA, right: BORDA_CINZA };
+  });
+
+  let linhaResumo = 3;
+  const pesoTotalGeral = bobinas.reduce((s, b) => s + (b.peso || 0), 0);
+  const qtdTotalGeral = bobinas.length;
+
+  const tiposGerais = [...new Set(bobinas.map(b => b.tipo))].sort((a, b) => {
+    const ia = ordemTipo.indexOf(a), ib = ordemTipo.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  tiposGerais.forEach((tipo, ti) => {
+    const corDivisor = tipo === 'Miolo' ? COR_MIOLO : COR_CAPA;
+
+    wsResumo.mergeCells(`A${linhaResumo}:F${linhaResumo}`);
+    wsResumo.getRow(linhaResumo).height = 18;
+    const div = wsResumo.getCell(`A${linhaResumo}`);
+    div.value = '  ' + tipo.toUpperCase();
+    div.font = { bold: true, size: 10, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    div.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: corDivisor } };
+    div.alignment = { horizontal: 'left', vertical: 'middle' };
+    linhaResumo++;
+
+    const grupos = {};
+    bobinas.filter(b => b.tipo === tipo).forEach(b => {
+      const chave = b.formato + '|' + b.gramatura;
+      if (!grupos[chave]) grupos[chave] = { formato: b.formato, gramatura: b.gramatura, peso: 0, qtd: 0 };
+      grupos[chave].peso += (b.peso || 0);
+      grupos[chave].qtd += 1;
+    });
+    const gruposOrdenados = Object.values(grupos).sort((a, b) => a.formato - b.formato || a.gramatura - b.gramatura);
+
+    gruposOrdenados.forEach((g, i) => {
+      const faixa = (i % 2 === 0) ? 'FFD6E3F4' : 'FFBDD6EE';
+      const row = wsResumo.getRow(linhaResumo);
+      row.height = 18;
+      const pct = pesoTotalGeral > 0 ? g.peso / pesoTotalGeral : 0;
+      [tipo, g.formato, g.gramatura, g.qtd, g.peso, pct].forEach((v, idx) => {
+        const cell = row.getCell(idx + 1);
+        cell.value = v;
+        cell.font = { size: 10, name: 'Arial', color: { argb: 'FF000000' }, bold: idx === 3 };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: faixa } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = { top: BORDA_CINZA, bottom: BORDA_CINZA, left: BORDA_CINZA, right: BORDA_CINZA };
+        if (idx === 4) cell.numFmt = '#,##0';
+        if (idx === 5) cell.numFmt = '0.0%';
+      });
+      linhaResumo++;
+    });
+  });
+
+  wsResumo.mergeCells(`A${linhaResumo}:C${linhaResumo}`);
+  wsResumo.getRow(linhaResumo).height = 19.5;
+  const totalGeralLabel = wsResumo.getCell(`A${linhaResumo}`);
+  totalGeralLabel.value = 'TOTAL GERAL';
+  const totalGeralQtd = wsResumo.getCell(`D${linhaResumo}`);
+  totalGeralQtd.value = qtdTotalGeral;
+  const totalGeralPeso = wsResumo.getCell(`E${linhaResumo}`);
+  totalGeralPeso.value = pesoTotalGeral;
+  totalGeralPeso.numFmt = '#,##0';
+  const totalGeralPct = wsResumo.getCell(`F${linhaResumo}`);
+  totalGeralPct.value = pesoTotalGeral > 0 ? 1 : 0;
+  totalGeralPct.numFmt = '0.0%';
+  [totalGeralLabel, totalGeralQtd, totalGeralPeso, totalGeralPct].forEach(cell => {
+    cell.font = { bold: true, size: 11, name: 'Arial', color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_PRETO } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Estoque_Bobinas_' + dataArq + '.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ==================== OCR ETIQUETA PIQUIRI ====================
