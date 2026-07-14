@@ -330,8 +330,10 @@ select:focus, input:focus {
 
     <div id="wrapOcrPiquiri" style="display:none">
       <button type="button" class="btn btn-roxo" onclick="abrirCameraPiquiri()">📷&nbsp;&nbsp;ESCANEAR ETIQUETA (OCR)</button>
+      <button type="button" class="btn btn-roxo" style="margin-top:10px" onclick="abrirGaleriaPiquiri()">🖼&nbsp;&nbsp;LER FOTO DA GALERIA (OCR)</button>
     </div>
     <input type="file" id="inputCameraPiquiri" accept="image/*" capture="environment" style="display:none">
+    <input type="file" id="inputGaleriaPiquiri" accept="image/*" style="display:none">
 
     <label class="lbl">Nota Fiscal</label>
     <input type="text" id="notaFiscal" placeholder="Ex: 12345" inputmode="numeric" autocomplete="off">
@@ -463,7 +465,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v12';
+const APP_VERSION = 'v13';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -976,10 +978,18 @@ async function gerarExcel() {
 // ==================== OCR ETIQUETA PIQUIRI ====================
 
 document.getElementById('inputCameraPiquiri').addEventListener('change', processarFotoEtiqueta);
+document.getElementById('inputGaleriaPiquiri').addEventListener('change', processarFotoEtiqueta);
 
 function abrirCameraPiquiri() {
   document.getElementById('inputCameraPiquiri').value = '';
   document.getElementById('inputCameraPiquiri').click();
+}
+
+// Fluxo recomendado: fotografar a etiqueta com o modo "Documentos" da câmera
+// do celular (corta, alinha e tira reflexo) e depois ler a foto da galeria.
+function abrirGaleriaPiquiri() {
+  document.getElementById('inputGaleriaPiquiri').value = '';
+  document.getElementById('inputGaleriaPiquiri').click();
 }
 
 function abrirModalOcr() {
@@ -992,6 +1002,7 @@ function abrirModalOcr() {
 function fecharModalOcr() {
   document.getElementById('modalOcr').classList.remove('show');
   document.getElementById('inputCameraPiquiri').value = '';
+  document.getElementById('inputGaleriaPiquiri').value = '';
 }
 
 // Redimensiona a foto antes do OCR: fotos de câmera vêm enormes (3000px+),
@@ -1106,9 +1117,13 @@ function parseEtiquetaPiquiri(textoOriginal) {
   }
 
   // ── Medidas: primeiro número é o formato, segundo o diâmetro ──
+  // Tolera a letra O no lugar do zero ("179OMMX 1100"), confusão comum do OCR.
   let formato = '', diametro = '';
-  const medMatch = t.match(/(\d{2,5})\s*MM?\s*[xX×]\s*(\d{2,5})\s*MM?/i);
-  if (medMatch) { formato = medMatch[1]; diametro = medMatch[2]; }
+  const medMatch = t.match(/([\dOo]{2,5})\s*MM?\s*[xX×]\s*([\dOo]{2,5})/i);
+  if (medMatch) {
+    formato  = medMatch[1].replace(/[Oo]/g, '0');
+    diametro = medMatch[2].replace(/[Oo]/g, '0');
+  }
 
   // ── Peso líquido ──
   let peso = '';
@@ -1120,7 +1135,8 @@ function parseEtiquetaPiquiri(textoOriginal) {
   const gram1 = t.match(/GRAMATURA\s*[:.]*\s*(\d{2,3})/i);
   if (gram1) gramatura = gram1[1];
   if (!gramatura) {
-    const gram2 = t.match(/(\d{2,3})\s*gr\b/i);
+    // "130gr", "120g", "130 gm" — o r some com frequência na leitura
+    const gram2 = t.match(/(\d{2,3})\s*g[rm]?\b/i);
     if (gram2) gramatura = gram2[1];
   }
   if (!gramatura) {
