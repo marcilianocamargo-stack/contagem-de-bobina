@@ -465,7 +465,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v14';
+const APP_VERSION = 'v15';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -1134,9 +1134,12 @@ function parseEtiquetaPiquiri(textoOriginal) {
   }
 
   // ── Peso líquido ──
+  // "PESO LÍQ.:" chega mutilado ("PESO Lia: 720K5"), então exige apenas o L
+  // após PESO — o que já exclui o PESO BRU. — e tolera lixo curto no lugar
+  // do "ÍQ.:", O no lugar de zero e o Kg lido como K5/K9.
   let peso = '';
-  const pesoMatch = t.match(/PESO\s*L[IÍ]Q[.\s]*[:.]*\s*(\d+(?:[.,]\d+)?)\s*K/i);
-  if (pesoMatch) peso = pesoMatch[1].replace(',', '.');
+  const pesoMatch = t.match(/PESO\s*L[^\s\d]{0,6}[\s:.=]*([\dOo]{2,4}(?:[.,]\d+)?)\s*K/i);
+  if (pesoMatch) peso = pesoMatch[1].replace(/[Oo]/g, '0').replace(',', '.');
 
   // ── Gramatura ──
   let gramatura = '';
@@ -1153,9 +1156,9 @@ function parseEtiquetaPiquiri(textoOriginal) {
     // Na etiqueta a gramatura fica ao lado do peso líquido, e o OCR costuma
     // ler "781Kg 1207" ("120gr" com o gr virando dígito). Como gramatura de
     // papel não passa de ~450 g/m², recorta o número até ficar plausível.
-    const linhaPeso = linhas.find(l => /PESO\s*L[IÍ]Q/i.test(l));
+    const linhaPeso = linhas.find(l => /PESO\s*L/i.test(l));
     if (linhaPeso) {
-      const gm = linhaPeso.match(/K[gG9]\D*(\d{2,4})/);
+      const gm = linhaPeso.match(/K[gG95Ss]?\D*(\d{2,4})/);
       if (gm) {
         let cand = gm[1];
         if (parseInt(cand, 10) > 450) cand = cand.slice(0, 3);
