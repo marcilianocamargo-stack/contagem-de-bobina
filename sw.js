@@ -1,9 +1,10 @@
-const CACHE = 'bobinas-v5';
+const CACHE = 'bobinas-v6';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'
 ];
 const NETWORK_FIRST = ['./', './index.html'];
 

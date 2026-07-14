@@ -257,6 +257,42 @@ select:focus, input:focus {
 }
 .flash-overlay.show .flash-box { transform: scale(1); }
 
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 10000;
+  padding: 30px 14px;
+  overflow-y: auto;
+}
+.modal-overlay.show { display: flex; }
+.modal-box {
+  background: white;
+  border-radius: 16px;
+  padding: 22px 20px;
+  max-width: 480px;
+  width: 100%;
+  box-shadow: 0 10px 40px rgba(0,0,0,.35);
+}
+.modal-title {
+  font-weight: 800;
+  color: #1a56a0;
+  font-size: 19px;
+  margin-bottom: 4px;
+}
+.ocr-status {
+  text-align: center;
+  font-weight: 700;
+  color: #1a56a0;
+  padding: 34px 10px;
+  font-size: 17px;
+  line-height: 1.5;
+}
+.btn-roxo { background: #6a3fa0; box-shadow: 0 4px 14px rgba(106,63,160,.35); margin-top: 10px; }
+
 .footer { margin-top: 20px; text-align: center; color: #7a9abf; font-size: 14px; padding-bottom: 24px; }
 
 @media (max-width: 420px) {
@@ -291,6 +327,14 @@ select:focus, input:focus {
       <option value="Klabin">
       <option value="Suzano">
     </datalist>
+
+    <div id="wrapOcrPiquiri" style="display:none">
+      <button type="button" class="btn btn-roxo" onclick="abrirCameraPiquiri()">📷&nbsp;&nbsp;ESCANEAR ETIQUETA (OCR)</button>
+    </div>
+    <input type="file" id="inputCameraPiquiri" accept="image/*" capture="environment" style="display:none">
+
+    <label class="lbl">Nota Fiscal</label>
+    <input type="text" id="notaFiscal" placeholder="Ex: 12345" inputmode="numeric" autocomplete="off">
 
     <label class="lbl">Cód. Fornecedor</label>
     <input type="text" id="codFornecedor" placeholder="Ex: 26877" inputmode="numeric" autocomplete="off">
@@ -368,9 +412,53 @@ select:focus, input:focus {
   <div class="flash-box" id="flashBox"></div>
 </div>
 
+<div class="modal-overlay" id="modalOcr">
+  <div class="modal-box">
+    <div class="modal-title">📷 Conferir Etiqueta Piquiri</div>
+    <div class="ocr-status" id="ocrStatus">🔍 Lendo etiqueta, aguarde...</div>
+    <div id="ocrCampos" style="display:none">
+      <label class="lbl" style="margin-top:0">Nota Fiscal</label>
+      <input type="text" id="ocrNotaFiscal" inputmode="numeric" placeholder="(vazio)">
+
+      <label class="lbl">Cód. Fornecedor</label>
+      <input type="text" id="ocrCodFornecedor" placeholder="(vazio)">
+
+      <div class="grid3">
+        <div>
+          <label class="lbl">Formato (mm)</label>
+          <input type="number" id="ocrFormato" placeholder="(vazio)">
+        </div>
+        <div>
+          <label class="lbl">Diâmetro (mm)</label>
+          <input type="number" id="ocrDiametro" placeholder="(vazio)">
+        </div>
+        <div>
+          <label class="lbl">Gramatura</label>
+          <input type="number" id="ocrGramatura" placeholder="(vazio)">
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div>
+          <label class="lbl">Peso (kg)</label>
+          <input type="number" id="ocrPeso" step="0.1" placeholder="(vazio)">
+        </div>
+        <div>
+          <label class="lbl">Quantidade</label>
+          <input type="number" id="ocrQuantidade" value="1" min="1" step="1">
+        </div>
+      </div>
+
+      <button class="btn btn-verde" onclick="confirmarSalvarOcr()">✓&nbsp;&nbsp;CONFIRMAR E SALVAR</button>
+      <button class="btn btn-cinza" onclick="fecharModalOcr()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v5';
+const APP_VERSION = 'v6';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -417,8 +505,8 @@ function verificarAtualizacao() {
 const STORAGE_KEY = 'bobinas_estoque';
 let bobinas = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
 
-const campos = ['fornecedor','codFornecedor','tipo','formato','diametro','gramatura','peso','quantidade'];
-const ordemTab = ['fornecedor','codFornecedor','tipo','formato','diametro','gramatura','peso','quantidade'];
+const campos = ['fornecedor','notaFiscal','codFornecedor','tipo','formato','diametro','gramatura','peso','quantidade'];
+const ordemTab = ['fornecedor','notaFiscal','codFornecedor','tipo','formato','diametro','gramatura','peso','quantidade'];
 
 // Tab order entre campos
 ordemTab.forEach((id, i) => {
@@ -432,7 +520,10 @@ ordemTab.forEach((id, i) => {
   });
 });
 
-function fmt(n) { return Number(n).toLocaleString('pt-BR', {maximumFractionDigits: 1}); }
+function fmt(n) {
+  if (n === null || n === undefined || n === '') return '—';
+  return Number(n).toLocaleString('pt-BR', {maximumFractionDigits: 1});
+}
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 function aoDigitarFornecedor() {
@@ -440,19 +531,23 @@ function aoDigitarFornecedor() {
   const wrapTipo  = document.getElementById('wrapTipo');
   const selTipo   = document.getElementById('tipo');
   const codInput  = document.getElementById('codFornecedor');
+  const wrapOcr   = document.getElementById('wrapOcrPiquiri');
   if (forn === 'piquiri') {
     selTipo.value = 'Capa';
     wrapTipo.style.display = 'none';
     codInput.inputMode = 'numeric';
     codInput.placeholder = 'Ex: 26877';
+    wrapOcr.style.display = 'block';
   } else {
     wrapTipo.style.display = 'block';
     codInput.inputMode = 'text';
     codInput.placeholder = 'Ex: AB1234';
+    wrapOcr.style.display = 'none';
   }
 }
 
 function salvarBobina() {
+  const notaFiscal = document.getElementById('notaFiscal').value.trim();
   const cod   = document.getElementById('codFornecedor').value.trim();
   const forn  = document.getElementById('fornecedor').value.trim();
   const tipo  = document.getElementById('tipo').value;
@@ -474,6 +569,7 @@ function salvarBobina() {
   for (let i = 0; i < qtd; i++) {
     bobinas.push({
       id: Date.now() + i,
+      notaFiscal,
       codFornecedor: cod,
       fornecedor: forn,
       tipo,
@@ -504,6 +600,7 @@ function limparFormulario() {
   });
   document.getElementById('quantidade').value = '1';
   document.getElementById('wrapTipo').style.display = 'block';
+  document.getElementById('wrapOcrPiquiri').style.display = 'none';
   document.getElementById('msgBobina').style.display = 'none';
 }
 
@@ -529,7 +626,7 @@ function renderLista() {
   }
   card.style.display = 'block';
 
-  const totalPeso = bobinas.reduce((s, b) => s + b.peso, 0);
+  const totalPeso = bobinas.reduce((s, b) => s + (b.peso || 0), 0);
   document.getElementById('totalBobinas').textContent = bobinas.length;
   document.getElementById('totalPeso').textContent = fmt(totalPeso);
   document.getElementById('listaCount').textContent = bobinas.length;
@@ -538,7 +635,7 @@ function renderLista() {
   div.innerHTML = [...bobinas].reverse().map((b, i) => `
     <div class="bobina-item">
       <div class="bi-info">
-        <div class="bi-num">#${bobinas.length - i}${b.codFornecedor ? ' · Cód: ' + esc(b.codFornecedor) : ''}</div>
+        <div class="bi-num">#${bobinas.length - i}${b.notaFiscal ? ' · NF: ' + esc(b.notaFiscal) : ''}${b.codFornecedor ? ' · Cód: ' + esc(b.codFornecedor) : ''}</div>
         <div class="bi-forn">${esc(b.fornecedor)}</div>
         <div class="bi-det">
           ${esc(b.tipo)} &nbsp;·&nbsp; ${fmt(b.formato)} mm &nbsp;·&nbsp; Ø ${fmt(b.diametro)} mm &nbsp;·&nbsp; ${fmt(b.gramatura)} g/m²
@@ -565,13 +662,13 @@ function gerarExcel() {
     ['Gerado em: ' + dataHoje],
     ['Total de bobinas: ' + bobinas.length],
     [],
-    ['Cód. Fornecedor','Fornecedor','Tipo','Formato (mm)','Diâmetro (mm)','Gramatura (g/m²)','Peso (kg)'],
-    ...bobinas.map(b => [b.codFornecedor, b.fornecedor, b.tipo, b.formato, b.diametro, b.gramatura, b.peso]),
+    ['Nota Fiscal','Cód. Fornecedor','Fornecedor','Tipo','Formato (mm)','Diâmetro (mm)','Gramatura (g/m²)','Peso (kg)'],
+    ...bobinas.map(b => [b.notaFiscal || '', b.codFornecedor, b.fornecedor, b.tipo, b.formato, b.diametro, b.gramatura, b.peso]),
     [],
-    ['','','','','','TOTAL PESO (kg):', bobinas.reduce((s,b) => s + b.peso, 0)]
+    ['','','','','','','TOTAL PESO (kg):', bobinas.reduce((s,b) => s + (b.peso || 0), 0)]
   ];
   const wsCompleto = XLSX.utils.aoa_to_sheet(dadosCompleto);
-  wsCompleto['!cols'] = [{wch:18},{wch:20},{wch:10},{wch:14},{wch:14},{wch:18},{wch:12}];
+  wsCompleto['!cols'] = [{wch:14},{wch:18},{wch:20},{wch:10},{wch:14},{wch:14},{wch:18},{wch:12}];
   XLSX.utils.book_append_sheet(wb, wsCompleto, 'Estoque');
 
   // ── ABA 2: Separado por Fornecedor › Tipo › Formato › Gramatura ──
@@ -619,23 +716,23 @@ function gerarExcel() {
       tipoAtual = g.tipo;
     }
     // Cabeçalho do grupo formato + gramatura
-    const totalGrupo = g.bobinas.reduce((s, b) => s + b.peso, 0);
+    const totalGrupo = g.bobinas.reduce((s, b) => s + (b.peso || 0), 0);
     dadosAgrup.push(['', '', 'Formato: ' + g.formato + ' mm  |  Gramatura: ' + g.gramatura + ' g/m²  |  Qtd: ' + g.bobinas.length + ' bobina(s)  |  Peso total: ' + totalGrupo.toLocaleString('pt-BR', {maximumFractionDigits:1}) + ' kg']);
     // Linha de cabeçalho das bobinas
-    dadosAgrup.push(['','','','Diâmetro (mm)','Peso (kg)']);
+    dadosAgrup.push(['','','','Nota Fiscal','Diâmetro (mm)','Peso (kg)']);
     // Cada bobina do grupo
     g.bobinas.forEach(b => {
-      dadosAgrup.push(['','','', b.diametro, b.peso]);
+      dadosAgrup.push(['','','', b.notaFiscal || '', b.diametro, b.peso]);
     });
   });
 
   // Total geral no final
-  const totalGeralPeso = bobinas.reduce((s,b) => s + b.peso, 0);
+  const totalGeralPeso = bobinas.reduce((s,b) => s + (b.peso || 0), 0);
   dadosAgrup.push([]);
-  dadosAgrup.push(['TOTAL GERAL','','', bobinas.length + ' bobinas', totalGeralPeso]);
+  dadosAgrup.push(['TOTAL GERAL','','','', bobinas.length + ' bobinas', totalGeralPeso]);
 
   const wsAgrup = XLSX.utils.aoa_to_sheet(dadosAgrup);
-  wsAgrup['!cols'] = [{wch:8},{wch:14},{wch:52},{wch:16},{wch:14}];
+  wsAgrup['!cols'] = [{wch:8},{wch:14},{wch:52},{wch:14},{wch:16},{wch:14}];
   XLSX.utils.book_append_sheet(wb, wsAgrup, 'Agrupado');
 
   // ── ABA 3: Resumo por fornecedor ──
@@ -644,7 +741,7 @@ function gerarExcel() {
     const k = b.fornecedor;
     if (!porForn[k]) porForn[k] = { cod: b.codFornecedor, forn: b.fornecedor, qtd: 0, peso: 0 };
     porForn[k].qtd++;
-    porForn[k].peso += b.peso;
+    porForn[k].peso += (b.peso || 0);
   });
   const resumo = [
     ['RESUMO POR FORNECEDOR'], [],
@@ -657,6 +754,128 @@ function gerarExcel() {
   XLSX.utils.book_append_sheet(wb, wsRes, 'Resumo');
 
   XLSX.writeFile(wb, 'Estoque_Bobinas_' + dataArq + '.xlsx');
+}
+
+// ==================== OCR ETIQUETA PIQUIRI ====================
+
+document.getElementById('inputCameraPiquiri').addEventListener('change', processarFotoEtiqueta);
+
+function abrirCameraPiquiri() {
+  document.getElementById('inputCameraPiquiri').value = '';
+  document.getElementById('inputCameraPiquiri').click();
+}
+
+function abrirModalOcr() {
+  document.getElementById('ocrStatus').textContent = '🔍 Lendo etiqueta, aguarde...\n(pode levar alguns segundos)';
+  document.getElementById('ocrStatus').style.display = 'block';
+  document.getElementById('ocrCampos').style.display = 'none';
+  document.getElementById('modalOcr').classList.add('show');
+}
+
+function fecharModalOcr() {
+  document.getElementById('modalOcr').classList.remove('show');
+  document.getElementById('inputCameraPiquiri').value = '';
+}
+
+async function processarFotoEtiqueta(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  abrirModalOcr();
+
+  try {
+    const resultado = await Tesseract.recognize(file, 'por');
+    const texto = (resultado && resultado.data && resultado.data.text) || '';
+    const dados = parseEtiquetaPiquiri(texto);
+
+    document.getElementById('ocrNotaFiscal').value    = dados.notaFiscal;
+    document.getElementById('ocrCodFornecedor').value = '';
+    document.getElementById('ocrFormato').value       = dados.formato;
+    document.getElementById('ocrDiametro').value      = dados.diametro;
+    document.getElementById('ocrGramatura').value     = dados.gramatura;
+    document.getElementById('ocrPeso').value          = dados.peso;
+    document.getElementById('ocrQuantidade').value    = 1;
+
+    document.getElementById('ocrStatus').style.display = 'none';
+    document.getElementById('ocrCampos').style.display = 'block';
+  } catch (err) {
+    document.getElementById('ocrStatus').textContent =
+      '⚠ Erro ao ler a etiqueta.\nFeche e tente novamente.\n' + (err && err.message ? err.message : '');
+  }
+}
+
+// Extrai Nota Fiscal, Formato, Diâmetro, Gramatura e Peso Líq. do texto OCR
+// da etiqueta padrão Piquiri (layout: NOTA FISCAL / PEDIDO / DATA FABRIC / PESO BRU
+// e MEDIDAS 750MM X 1100MM / GRAMATURA / PESO LÍQ.)
+function parseEtiquetaPiquiri(textoOriginal) {
+  const t = String(textoOriginal || '').replace(/\r/g, '');
+
+  function grabNumberAfter(regexLabel) {
+    const re = new RegExp(regexLabel + '\\s*[:.]*\\s*([0-9][0-9.,\\/]*)', 'i');
+    const m = t.match(re);
+    return m ? m[1].trim().replace(/[.,]+$/, '') : '';
+  }
+
+  const notaFiscal = grabNumberAfter('NOTA\\s*FISCAL');
+
+  let formato = '', diametro = '';
+  const medMatch = t.match(/(\d{2,5})\s*MM?\s*[xX×]\s*(\d{2,5})\s*MM?/i);
+  if (medMatch) { formato = medMatch[1]; diametro = medMatch[2]; }
+
+  let gramatura = '';
+  const gramMatch = t.match(/GRAMATURA\s*[:.]*\s*(\d+(?:[.,]\d+)?)\s*g/i);
+  if (gramMatch) gramatura = gramMatch[1].replace(',', '.');
+
+  let peso = '';
+  const pesoMatch = t.match(/PESO\s*L[IÍ]Q[.\s]*[:.]*\s*(\d+(?:[.,]\d+)?)\s*K/i);
+  if (pesoMatch) peso = pesoMatch[1].replace(',', '.');
+
+  return { notaFiscal, formato, diametro, gramatura, peso };
+}
+
+function confirmarSalvarOcr() {
+  const notaFiscal = document.getElementById('ocrNotaFiscal').value.trim();
+  const cod        = document.getElementById('ocrCodFornecedor').value.trim();
+  const fmt_       = document.getElementById('ocrFormato').value.trim();
+  const diam       = document.getElementById('ocrDiametro').value.trim();
+  const gram       = document.getElementById('ocrGramatura').value.trim();
+  const peso       = document.getElementById('ocrPeso').value.trim();
+  const qtd        = parseInt(document.getElementById('ocrQuantidade').value) || 1;
+
+  const faltando = [];
+  if (!notaFiscal) faltando.push('Nota Fiscal');
+  if (!fmt_)       faltando.push('Formato');
+  if (!diam)       faltando.push('Diâmetro');
+  if (!gram)       faltando.push('Gramatura');
+  if (!peso)       faltando.push('Peso Líquido');
+
+  if (faltando.length > 0) {
+    const continuar = confirm(
+      'Os seguintes campos ficaram em branco:\n' + faltando.join(', ') +
+      '\n\nDeseja salvar mesmo assim (campo em branco) ou prefere preencher antes?'
+    );
+    if (!continuar) return;
+  }
+
+  for (let i = 0; i < qtd; i++) {
+    bobinas.push({
+      id: Date.now() + i,
+      notaFiscal: notaFiscal || '',
+      codFornecedor: cod || '',
+      fornecedor: 'Piquiri',
+      tipo: 'Capa',
+      formato: fmt_ ? parseFloat(fmt_) : null,
+      diametro: diam ? parseFloat(diam) : null,
+      gramatura: gram ? parseFloat(gram) : null,
+      peso: peso ? parseFloat(peso) : null,
+    });
+  }
+
+  salvarLocal();
+  renderLista();
+  fecharModalOcr();
+  mostrarFlash(qtd > 1
+    ? '✓ ' + qtd + ' Bobinas Salvas!\nPiquiri · OCR'
+    : '✓ Bobina Salva!\nPiquiri · OCR');
 }
 
 function mostrarMsg(txt, tipo) {
