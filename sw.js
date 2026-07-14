@@ -1,4 +1,4 @@
-const CACHE = 'bobinas-v10';
+const CACHE = 'bobinas-v11';
 const ASSETS = [
   './',
   './index.html',

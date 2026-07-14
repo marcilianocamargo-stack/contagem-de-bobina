@@ -463,7 +463,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v10';
+const APP_VERSION = 'v11';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -525,8 +525,10 @@ ordemTab.forEach((id, i) => {
   });
 });
 
+// "00000" marca ausência de dado (bobinas cuja etiqueta veio sem informação)
+const SEM_DADO = '00000';
 function fmt(n) {
-  if (n === null || n === undefined || n === '') return '—';
+  if (n === null || n === undefined || n === '' || Number(n) === 0) return SEM_DADO;
   return Number(n).toLocaleString('pt-BR', {maximumFractionDigits: 1});
 }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -565,23 +567,34 @@ function salvarBobina() {
 
   if (!forn)  { mostrarMsg('⚠ Informe o Fornecedor!', 'err');  document.getElementById('fornecedor').focus(); return; }
   if (!tipo)  { mostrarMsg('⚠ Selecione o Tipo!', 'err');      document.getElementById('tipo').focus(); return; }
-  if (!fmt_)  { mostrarMsg('⚠ Informe o Formato (mm)!', 'err'); document.getElementById('formato').focus(); return; }
-  if (!diam)  { mostrarMsg('⚠ Informe o Diâmetro (mm)!', 'err'); document.getElementById('diametro').focus(); return; }
-  if (!gram)  { mostrarMsg('⚠ Informe a Gramatura!', 'err');   document.getElementById('gramatura').focus(); return; }
-  if (!peso || parseFloat(peso) <= 0) { mostrarMsg('⚠ Informe o Peso (kg)!', 'err'); document.getElementById('peso').focus(); return; }
   if (!qtd || qtd < 1) { mostrarMsg('⚠ Quantidade inválida!', 'err'); document.getElementById('quantidade').focus(); return; }
+
+  // Etiqueta sem dados: campos em branco viram 00000 para marcar a ausência
+  const faltando = [];
+  if (!notaFiscal) faltando.push('Nota Fiscal');
+  if (!fmt_)       faltando.push('Formato');
+  if (!diam)       faltando.push('Diâmetro');
+  if (!gram)       faltando.push('Gramatura');
+  if (!peso || parseFloat(peso) <= 0) faltando.push('Peso');
+  if (faltando.length > 0) {
+    const continuar = confirm(
+      'Os seguintes campos estão em branco e serão salvos como 00000 (sem dados):\n' +
+      faltando.join(', ') + '\n\nDeseja salvar assim mesmo?'
+    );
+    if (!continuar) return;
+  }
 
   for (let i = 0; i < qtd; i++) {
     bobinas.push({
       id: Date.now() + i,
-      notaFiscal,
-      codFornecedor: cod,
+      notaFiscal: notaFiscal || SEM_DADO,
+      codFornecedor: cod || SEM_DADO,
       fornecedor: forn,
       tipo,
-      formato: parseFloat(fmt_),
-      diametro: parseFloat(diam),
-      gramatura: parseFloat(gram),
-      peso: parseFloat(peso),
+      formato: fmt_ ? parseFloat(fmt_) : 0,
+      diametro: diam ? parseFloat(diam) : 0,
+      gramatura: gram ? parseFloat(gram) : 0,
+      peso: peso ? parseFloat(peso) : 0,
     });
   }
 
@@ -589,8 +602,8 @@ function salvarBobina() {
   limparFormulario();
   renderLista();
   mostrarFlash(qtd > 1
-    ? '✓ ' + qtd + ' Bobinas Salvas!\n' + forn + ' · ' + fmt(parseFloat(peso)) + ' kg cada'
-    : '✓ Bobina Salva!\n' + forn + ' · ' + fmt(parseFloat(peso)) + ' kg');
+    ? '✓ ' + qtd + ' Bobinas Salvas!\n' + forn + ' · ' + fmt(peso ? parseFloat(peso) : 0) + ' kg cada'
+    : '✓ Bobina Salva!\n' + forn + ' · ' + fmt(peso ? parseFloat(peso) : 0) + ' kg');
   setTimeout(() => document.getElementById('codFornecedor').focus(), 80);
 }
 
@@ -665,6 +678,12 @@ const COR_ZEBRA  = 'FFD6E4F0';
 const BORDA_CINZA = { style: 'thin', color: { argb: 'FFAAAAAA' } };
 const BORDA_PRETA = { style: 'thin', color: { argb: 'FF000000' } };
 
+// Valor de célula: vazio ou zero vira 00000 (ausência de dados na etiqueta)
+function celVal(v) {
+  if (v === null || v === undefined || v === '' || Number(v) === 0) return SEM_DADO;
+  return v;
+}
+
 function nomeAba(fornecedor, usados) {
   let base = fornecedor.toUpperCase().replace(/[\\\/\?\*\[\]:]/g, '').substring(0, 28).trim() || 'FORNECEDOR';
   let nome = base, n = 2;
@@ -701,7 +720,7 @@ async function gerarExcel() {
   });
 
   bobinas.forEach((b, i) => {
-    const row = wsEst.addRow([b.notaFiscal || '', b.codFornecedor, b.fornecedor, b.tipo, b.formato, b.diametro, b.gramatura, b.peso]);
+    const row = wsEst.addRow([celVal(b.notaFiscal), celVal(b.codFornecedor), b.fornecedor, b.tipo, celVal(b.formato), celVal(b.diametro), celVal(b.gramatura), celVal(b.peso)]);
     const faixa = (i % 2 === 1) ? COR_ZEBRA : null;
     row.eachCell(cell => {
       cell.font = { size: 10, name: 'Arial', color: { argb: 'FF000000' } };
@@ -787,7 +806,7 @@ async function gerarExcel() {
         const faixa = (i % 2 === 0) ? COR_FAIXA1 : COR_FAIXA2;
         const row = ws.getRow(linha);
         row.height = 15.75;
-        [tipo, g.gramatura, g.formato, g.peso, g.qtd].forEach((v, idx) => {
+        [tipo, celVal(g.gramatura), celVal(g.formato), g.peso, g.qtd].forEach((v, idx) => {
           const cell = row.getCell(idx + 1);
           cell.value = v;
           cell.font = { size: 10, name: 'Arial', color: { argb: 'FF000000' }, bold: idx === 4 };
@@ -906,7 +925,7 @@ async function gerarExcel() {
       const row = wsResumo.getRow(linhaResumo);
       row.height = 18;
       const pct = pesoTotalGeral > 0 ? g.peso / pesoTotalGeral : 0;
-      [tipo, g.formato, g.gramatura, g.qtd, g.peso, pct].forEach((v, idx) => {
+      [tipo, celVal(g.formato), celVal(g.gramatura), g.qtd, g.peso, pct].forEach((v, idx) => {
         const cell = row.getCell(idx + 1);
         cell.value = v;
         cell.font = { size: 10, name: 'Arial', color: { argb: 'FF000000' }, bold: idx === 3 };
@@ -1135,8 +1154,8 @@ function confirmarSalvarOcr() {
 
   if (faltando.length > 0) {
     const continuar = confirm(
-      'Os seguintes campos ficaram em branco:\n' + faltando.join(', ') +
-      '\n\nDeseja salvar mesmo assim (campo em branco) ou prefere preencher antes?'
+      'Os seguintes campos ficaram em branco e serão salvos como 00000 (sem dados):\n' +
+      faltando.join(', ') + '\n\nDeseja salvar assim mesmo ou prefere preencher antes?'
     );
     if (!continuar) return;
   }
@@ -1144,14 +1163,14 @@ function confirmarSalvarOcr() {
   for (let i = 0; i < qtd; i++) {
     bobinas.push({
       id: Date.now() + i,
-      notaFiscal: notaFiscal || '',
-      codFornecedor: cod || '',
+      notaFiscal: notaFiscal || SEM_DADO,
+      codFornecedor: cod || SEM_DADO,
       fornecedor: 'Piquiri',
       tipo: 'Capa',
-      formato: fmt_ ? parseFloat(fmt_) : null,
-      diametro: diam ? parseFloat(diam) : null,
-      gramatura: gram ? parseFloat(gram) : null,
-      peso: peso ? parseFloat(peso) : null,
+      formato: fmt_ ? parseFloat(fmt_) : 0,
+      diametro: diam ? parseFloat(diam) : 0,
+      gramatura: gram ? parseFloat(gram) : 0,
+      peso: peso ? parseFloat(peso) : 0,
     });
   }
 
