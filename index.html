@@ -465,7 +465,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v13';
+const APP_VERSION = 'v14';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -1006,7 +1006,7 @@ function fecharModalOcr() {
 }
 
 // Redimensiona a foto antes do OCR: fotos de câmera vêm enormes (3000px+),
-// o que deixa o Tesseract muito lento. Reduzindo para no máx. ~1600px no
+// o que deixa o Tesseract muito lento. Reduzindo para no máx. ~2000px no
 // lado maior o reconhecimento fica bem mais rápido sem perder legibilidade.
 function redimensionarImagem(file, maxDim) {
   return new Promise((resolve, reject) => {
@@ -1052,7 +1052,7 @@ async function processarFotoEtiqueta(event) {
   abrirModalOcr();
 
   try {
-    const imagemMenor = await redimensionarImagem(file, 1600);
+    const imagemMenor = await redimensionarImagem(file, 2000);
     const resultado = await Tesseract.recognize(imagemMenor, 'por', {
       logger: m => {
         if (m.status === 'recognizing text' && typeof m.progress === 'number') {
@@ -1117,12 +1117,20 @@ function parseEtiquetaPiquiri(textoOriginal) {
   }
 
   // ── Medidas: primeiro número é o formato, segundo o diâmetro ──
-  // Tolera a letra O no lugar do zero ("179OMMX 1100"), confusão comum do OCR.
+  // Tolera O/I/l lidos no lugar de 0/1 ("179OMMX 1100") e leitura parcial:
+  // se um dos lados virou letras sem conserto ("MOQNM X 1100MM"), aproveita
+  // ao menos o lado legível e deixa o outro como sem-dado.
+  function numMed(s) { return s.replace(/[Oo]/g, '0').replace(/[IiLl]/g, '1'); }
   let formato = '', diametro = '';
-  const medMatch = t.match(/([\dOo]{2,5})\s*MM?\s*[xX×]\s*([\dOo]{2,5})/i);
+  const medMatch = t.match(/([\dOoIl]{2,5})\s*MM?\s*[xX×]\s*([\dOoIl]{2,5})/i);
   if (medMatch) {
-    formato  = medMatch[1].replace(/[Oo]/g, '0');
-    diametro = medMatch[2].replace(/[Oo]/g, '0');
+    formato  = numMed(medMatch[1]);
+    diametro = numMed(medMatch[2]);
+  } else {
+    const soFormato = t.match(/([\dOoIl]{3,5})\s*MM\s*[xX×]/i);
+    if (soFormato) formato = numMed(soFormato[1]);
+    const soDiametro = t.match(/[xX×]\s*([\dOoIl]{3,5})\s*M/i);
+    if (soDiametro) diametro = numMed(soDiametro[1]);
   }
 
   // ── Peso líquido ──
@@ -1135,8 +1143,10 @@ function parseEtiquetaPiquiri(textoOriginal) {
   const gram1 = t.match(/GRAMATURA\s*[:.]*\s*(\d{2,3})/i);
   if (gram1) gramatura = gram1[1];
   if (!gramatura) {
-    // "130gr", "120g", "130 gm" — o r some com frequência na leitura
-    const gram2 = t.match(/(\d{2,3})\s*g[rm]?\b/i);
+    // "130gr", "120g", "130 gm" — o r some com frequência na leitura.
+    // Exige não-dígito antes do número: em "1209gr" (120gr mal lido) não
+    // pode casar "209"; esse caso cai na heurística da linha do peso.
+    const gram2 = t.match(/(?:^|[^\d])(\d{2,3})\s*g[rm]?\b/i);
     if (gram2) gramatura = gram2[1];
   }
   if (!gramatura) {
