@@ -465,7 +465,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v15';
+const APP_VERSION = 'v16';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -527,10 +527,8 @@ ordemTab.forEach((id, i) => {
   });
 });
 
-// "00000" marca ausência de dado (bobinas cuja etiqueta veio sem informação)
-const SEM_DADO = '00000';
 function fmt(n) {
-  if (n === null || n === undefined || n === '' || Number(n) === 0) return SEM_DADO;
+  if (n === null || n === undefined || n === '' || Number(n) === 0) return '—';
   return Number(n).toLocaleString('pt-BR', {maximumFractionDigits: 1});
 }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -571,7 +569,7 @@ function salvarBobina() {
   if (!tipo)  { mostrarMsg('⚠ Selecione o Tipo!', 'err');      document.getElementById('tipo').focus(); return; }
   if (!qtd || qtd < 1) { mostrarMsg('⚠ Quantidade inválida!', 'err'); document.getElementById('quantidade').focus(); return; }
 
-  // Etiqueta sem dados: campos em branco viram 00000 para marcar a ausência
+  // Campos em branco são permitidos (etiqueta sem dados) após confirmação
   const faltando = [];
   if (!notaFiscal) faltando.push('Nota Fiscal');
   if (!fmt_)       faltando.push('Formato');
@@ -580,7 +578,7 @@ function salvarBobina() {
   if (!peso || parseFloat(peso) <= 0) faltando.push('Peso');
   if (faltando.length > 0) {
     const continuar = confirm(
-      'Os seguintes campos estão em branco e serão salvos como 00000 (sem dados):\n' +
+      'Os seguintes campos estão em branco e ficarão sem valor:\n' +
       faltando.join(', ') + '\n\nDeseja salvar assim mesmo?'
     );
     if (!continuar) return;
@@ -593,8 +591,8 @@ function salvarBobina() {
   for (let i = 0; i < qtd; i++) {
     bobinas.push({
       id: Date.now() + i,
-      notaFiscal: notaFiscal || SEM_DADO,
-      codFornecedor: codFinal || SEM_DADO,
+      notaFiscal: notaFiscal,
+      codFornecedor: codFinal,
       fornecedor: forn,
       tipo,
       formato: fmt_ ? parseFloat(fmt_) : 0,
@@ -684,9 +682,9 @@ const COR_ZEBRA  = 'FFD6E4F0';
 const BORDA_CINZA = { style: 'thin', color: { argb: 'FFAAAAAA' } };
 const BORDA_PRETA = { style: 'thin', color: { argb: 'FF000000' } };
 
-// Valor de célula: vazio ou zero vira 00000 (ausência de dados na etiqueta)
+// Valor de célula: dado ausente vira célula vazia
 function celVal(v) {
-  if (v === null || v === undefined || v === '' || Number(v) === 0) return SEM_DADO;
+  if (v === null || v === undefined || v === '' || Number(v) === 0) return '';
   return v;
 }
 
@@ -1005,9 +1003,9 @@ function fecharModalOcr() {
   document.getElementById('inputGaleriaPiquiri').value = '';
 }
 
-// Redimensiona a foto antes do OCR: fotos de câmera vêm enormes (3000px+),
-// o que deixa o Tesseract muito lento. Reduzindo para no máx. ~2000px no
-// lado maior o reconhecimento fica bem mais rápido sem perder legibilidade.
+// Redimensiona a foto antes do OCR. Calibrado com 20 etiquetas reais:
+// 2600px + escala de cinza SEM reforço de contraste leu mais campos —
+// o contraste extra estourava o texto branco das faixas verdes.
 function redimensionarImagem(file, maxDim) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -1026,24 +1024,44 @@ function redimensionarImagem(file, maxDim) {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, width, height);
-      // Escala de cinza com reforço de contraste: melhora a leitura do
-      // texto branco nas faixas verdes da etiqueta.
       const dadosImg = ctx.getImageData(0, 0, width, height);
       const px = dadosImg.data;
       for (let i = 0; i < px.length; i += 4) {
-        let v = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-        v = (v - 128) * 1.4 + 128;
-        px[i] = px[i + 1] = px[i + 2] = v < 0 ? 0 : v > 255 ? 255 : v;
+        const v = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+        px[i] = px[i + 1] = px[i + 2] = v;
       }
       ctx.putImageData(dadosImg, 0, 0);
-      canvas.toBlob(blob => {
-        URL.revokeObjectURL(url);
-        blob ? resolve(blob) : reject(new Error('Falha ao processar imagem'));
-      }, 'image/jpeg', 0.92);
+      URL.revokeObjectURL(url);
+      // Devolve o canvas (não um blob): a segunda passada recorta regiões dele.
+      resolve(canvas);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Falha ao carregar imagem')); };
     img.src = url;
   });
+}
+
+// Worker do Tesseract criado uma vez e reaproveitado: o primeiro scan paga o
+// carregamento, os seguintes ficam bem mais rápidos. PSM 4 (uma coluna de
+// texto) leu o layout da etiqueta melhor que o modo automático.
+let ocrWorkerPromise = null;
+function obterWorkerOcr() {
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = (async () => {
+      const worker = await Tesseract.createWorker('por', 1, {
+        logger: m => {
+          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+            document.getElementById('ocrStatus').textContent =
+              '🔍 Lendo etiqueta... ' + Math.round(m.progress * 100) + '%';
+          }
+        }
+      });
+      await worker.setParameters({ tessedit_pageseg_mode: '4' });
+      return worker;
+    })();
+    // se falhar (ex.: sem internet no primeiro uso), permite tentar de novo
+    ocrWorkerPromise.catch(() => { ocrWorkerPromise = null; });
+  }
+  return ocrWorkerPromise;
 }
 
 async function processarFotoEtiqueta(event) {
@@ -1052,30 +1070,27 @@ async function processarFotoEtiqueta(event) {
   abrirModalOcr();
 
   try {
-    const imagemMenor = await redimensionarImagem(file, 2000);
-    const resultado = await Tesseract.recognize(imagemMenor, 'por', {
-      logger: m => {
-        if (m.status === 'recognizing text' && typeof m.progress === 'number') {
-          document.getElementById('ocrStatus').textContent =
-            '🔍 Lendo etiqueta... ' + Math.round(m.progress * 100) + '%';
-        } else if (m.status) {
-          document.getElementById('ocrStatus').textContent = '🔍 ' + m.status + '...';
-        }
-      }
-    });
+    const canvasFoto = await redimensionarImagem(file, 2600);
+    const worker = await obterWorkerOcr();
+    // blocks:true traz a posição de cada palavra — é o que permite recortar
+    // a região exata de um campo mal lido e reler só aquele pedaço.
+    const resultado = await worker.recognize(canvasFoto, {}, { text: true, blocks: true });
     const texto = (resultado && resultado.data && resultado.data.text) || '';
     const dados = parseEtiquetaPiquiri(texto);
+    const debugReleitura = await relerCamposDuvidosos(worker, canvasFoto, resultado.data, dados);
 
-    // Campos que o OCR não leu já aparecem como 00000 (sem dados).
+    // Campos que o OCR não conseguiu ler ficam em branco para conferência.
     // Piquiri não tem código de fornecedor próprio: usa-se o nº da NF.
-    document.getElementById('ocrNotaFiscal').value    = dados.notaFiscal || SEM_DADO;
-    document.getElementById('ocrCodFornecedor').value = dados.notaFiscal || SEM_DADO;
-    document.getElementById('ocrFormato').value       = dados.formato || SEM_DADO;
-    document.getElementById('ocrDiametro').value      = dados.diametro || SEM_DADO;
-    document.getElementById('ocrGramatura').value     = dados.gramatura || SEM_DADO;
-    document.getElementById('ocrPeso').value          = dados.peso || SEM_DADO;
+    document.getElementById('ocrNotaFiscal').value    = dados.notaFiscal || '';
+    document.getElementById('ocrCodFornecedor').value = dados.notaFiscal || '';
+    document.getElementById('ocrFormato').value       = dados.formato || '';
+    document.getElementById('ocrDiametro').value      = dados.diametro || '';
+    document.getElementById('ocrGramatura').value     = dados.gramatura || '';
+    document.getElementById('ocrPeso').value          = dados.peso || '';
     document.getElementById('ocrQuantidade').value    = 1;
-    document.getElementById('ocrTextoBruto').textContent = texto.trim() || '(nenhum texto reconhecido)';
+    document.getElementById('ocrTextoBruto').textContent =
+      (texto.trim() || '(nenhum texto reconhecido)') +
+      (debugReleitura.length ? '\n\n--- releitura dos campos ---\n' + debugReleitura.join('\n') : '');
 
     document.getElementById('ocrStatus').style.display = 'none';
     document.getElementById('ocrCampos').style.display = 'block';
@@ -1083,6 +1098,182 @@ async function processarFotoEtiqueta(event) {
     document.getElementById('ocrStatus').textContent =
       '⚠ Erro ao ler a etiqueta.\nFeche e tente novamente.\n' + (err && err.message ? err.message : '');
   }
+}
+
+// ── Releitura cirúrgica ──────────────────────────────────────────────────
+// A etiqueta Piquiri tem layout fixo. Quando um campo vem em branco ou com
+// valor fora da faixa plausível na leitura da foto inteira, recorta-se só a
+// região ao redor do rótulo daquele campo (as posições vêm do próprio
+// Tesseract), amplia-se 3x e relê-se o pedaço isolado como linha única —
+// muito mais fácil de acertar do que a etiqueta inteira de uma vez.
+
+// Faixas plausíveis de cada campo; valor fora delas é tratado como leitura
+// errada e dispara a releitura. Calibradas com as etiquetas vistas até hoje.
+const FAIXAS_PIQUIRI = {
+  notaFiscal: v => /^\d{4,9}$/.test(v),
+  formato:    v => { const n = parseInt(v, 10); return n >= 200 && n <= 3000; },
+  diametro:   v => { const n = parseInt(v, 10); return n >= 500 && n <= 2000; },
+  gramatura:  v => { const n = parseInt(v, 10); return n >= 40  && n <= 450;  },
+  peso:       v => { const n = parseFloat(v);   return n >= 50  && n <= 5000; },
+};
+
+// Achata blocos→parágrafos→linhas→palavras do Tesseract numa lista simples.
+function coletarPalavras(data) {
+  if (data && Array.isArray(data.words) && data.words.length) return data.words;
+  const palavras = [];
+  ((data && data.blocks) || []).forEach(b =>
+    (b.paragraphs || []).forEach(p =>
+      (p.lines || []).forEach(l =>
+        (l.words || []).forEach(w => {
+          if (w.text && w.bbox) palavras.push(w);
+        }))));
+  return palavras;
+}
+
+// Em trechos onde só se esperam dígitos, letras parecidas viram números.
+function letrasParaDigitos(s) {
+  return String(s)
+    .replace(/[Oo°]/g, '0').replace(/[IiLl|!]/g, '1').replace(/[Zz]/g, '2')
+    .replace(/[Ss$]/g, '5').replace(/G/g, '6').replace(/T/g, '7')
+    .replace(/B/g, '8').replace(/[qg]/g, '9');
+}
+
+// Recorta a região do canvas, amplia 3x e lê com o worker (PSM já ajustado).
+async function ocrRecorte(worker, canvas, r) {
+  const x = Math.max(0, Math.round(r.x));
+  const y = Math.max(0, Math.round(r.y));
+  const w = Math.min(canvas.width  - x, Math.round(r.w));
+  const h = Math.min(canvas.height - y, Math.round(r.h));
+  if (w < 8 || h < 8) return '';
+  const crop = document.createElement('canvas');
+  crop.width  = w * 3;
+  crop.height = h * 3;
+  crop.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w * 3, h * 3);
+  const res = await worker.recognize(crop);
+  return ((res && res.data && res.data.text) || '').replace(/\n+/g, ' ').trim();
+}
+
+// Região à direita de um rótulo (valores na mesma linha da etiqueta).
+function regiaoAoLado(w, canvas, larguraFator) {
+  const h = w.bbox.y1 - w.bbox.y0;
+  return {
+    x: w.bbox.x1 + 2,
+    y: w.bbox.y0 - h * 0.7,
+    w: canvas.width * (larguraFator || 0.38),
+    h: h * 2.4,
+  };
+}
+
+// Região logo abaixo de um rótulo (tabela: rótulos numa linha, valores na outra).
+function regiaoAbaixo(w) {
+  const h  = w.bbox.y1 - w.bbox.y0;
+  const lw = w.bbox.x1 - w.bbox.x0;
+  return {
+    x: w.bbox.x0 - lw * 0.4,
+    y: w.bbox.y1 + 1,
+    w: lw * 1.9,
+    h: h * 3,
+  };
+}
+
+// Confere os campos da 1ª passada e relê os duvidosos. Altera `dados` no
+// lugar e devolve linhas de debug para o "Ver texto lido na foto".
+async function relerCamposDuvidosos(worker, canvas, data, dados) {
+  const debug = [];
+
+  // Valor implausível da 1ª passada é descartado (vira campo a reler).
+  for (const campo of Object.keys(FAIXAS_PIQUIRI)) {
+    if (dados[campo] && !FAIXAS_PIQUIRI[campo](dados[campo])) {
+      debug.push(campo + ': "' + dados[campo] + '" fora da faixa, descartado');
+      dados[campo] = '';
+    }
+  }
+
+  const palavras = coletarPalavras(data);
+  if (!palavras.length) return debug;
+
+  const acha = re => palavras.find(p => re.test(p.text));
+
+  // Monta a lista de recortes só do que falta.
+  const tarefas = [];
+
+  if (!dados.gramatura) {
+    const rot = acha(/GRAMATURA/i);
+    if (rot) tarefas.push({ campo: 'gramatura', regiao: regiaoAoLado(rot, canvas) });
+  }
+  if (!dados.peso) {
+    // "PESO" aparece também no PESO BRU da tabela; exige a palavra seguinte
+    // começando com L (LÍQ., Lia:, etc.) na mesma sequência de leitura.
+    let rotL = null;
+    for (let i = 0; i < palavras.length - 1; i++) {
+      if (/^PESO/i.test(palavras[i].text) && /^L/i.test(palavras[i + 1].text)) {
+        rotL = palavras[i + 1];
+        break;
+      }
+    }
+    if (!rotL) rotL = acha(/L[ÍI1l]Q/i);
+    if (rotL) tarefas.push({ campo: 'peso', regiao: regiaoAoLado(rotL, canvas) });
+  }
+  if (!dados.formato || !dados.diametro) {
+    const rot = acha(/MEDIDAS/i);
+    if (rot) tarefas.push({ campo: 'medidas', regiao: regiaoAoLado(rot, canvas, 0.5) });
+  }
+  if (!dados.notaFiscal) {
+    const rot = acha(/FISCAL/i);
+    if (rot) tarefas.push({ campo: 'notaFiscal', regiao: regiaoAbaixo(rot) });
+  }
+
+  if (!tarefas.length) return debug;
+
+  // PSM 7 = linha única, ideal para os recortes; restaura o modo tabela no fim.
+  await worker.setParameters({ tessedit_pageseg_mode: '7' });
+  try {
+    for (const t of tarefas) {
+      const txt = await ocrRecorte(worker, canvas, t.regiao);
+      debug.push(t.campo + ' releitura: "' + txt + '"');
+      if (!txt) continue;
+
+      // Cada campo gera candidatos (texto cru primeiro, depois com letras
+      // convertidas em dígitos) e o primeiro que cai na faixa plausível vence
+      // — assim "12Ogr" vira 120 e não um "12" truncado.
+      if (t.campo === 'gramatura') {
+        const conv = letrasParaDigitos(txt);
+        const cands = [];
+        let m = txt.match(/(?:^|[^\d])(\d{2,3})\s*g[rm]?\b/i);   if (m) cands.push(m[1]);
+        m = conv.match(/(?:^|[^\d])(\d{2,3})\s*[9g][rm]?\b/i);   if (m) cands.push(m[1]);
+        m = conv.match(/(?:^|[^\d])(\d{2,3})(?:[^\d]|$)/);       if (m) cands.push(m[1]);
+        m = conv.match(/(\d{2,3})/);                             if (m) cands.push(m[1]);
+        const v = cands.find(c => FAIXAS_PIQUIRI.gramatura(c));
+        if (v) dados.gramatura = v;
+
+      } else if (t.campo === 'peso') {
+        const conv = letrasParaDigitos(txt);
+        const cands = [];
+        let m = txt.match(/([\d.,]{2,7})\s*K/i);            if (m) cands.push(m[1]);
+        m = conv.match(/([\d.,]{2,7})\s*K/i);               if (m) cands.push(m[1]);
+        m = conv.match(/(\d{2,4}(?:[.,]\d+)?)/);            if (m) cands.push(m[1]);
+        const v = cands
+          .map(c => letrasParaDigitos(c).replace(',', '.').replace(/[^\d.]/g, ''))
+          .find(c => FAIXAS_PIQUIRI.peso(c));
+        if (v) dados.peso = v;
+
+      } else if (t.campo === 'medidas') {
+        const md = txt.match(/([\dOoIl]{2,5})\s*MM?\s*[xX×]\s*([\dOoIl]{2,5})/i);
+        if (md) {
+          const f = letrasParaDigitos(md[1]), d = letrasParaDigitos(md[2]);
+          if (!dados.formato  && FAIXAS_PIQUIRI.formato(f))  dados.formato  = f;
+          if (!dados.diametro && FAIXAS_PIQUIRI.diametro(d)) dados.diametro = d;
+        }
+
+      } else if (t.campo === 'notaFiscal') {
+        const m = letrasParaDigitos(txt).replace(/[.,\s]/g, '').match(/\d{4,9}/);
+        if (m && FAIXAS_PIQUIRI.notaFiscal(m[0])) dados.notaFiscal = m[0];
+      }
+    }
+  } finally {
+    await worker.setParameters({ tessedit_pageseg_mode: '4' });
+  }
+  return debug;
 }
 
 // Extrai Nota Fiscal, Formato, Diâmetro, Gramatura e Peso Líq. do texto OCR
@@ -1189,20 +1380,19 @@ function confirmarSalvarOcr() {
 
   if (faltando.length > 0) {
     const continuar = confirm(
-      'Os seguintes campos ficaram em branco e serão salvos como 00000 (sem dados):\n' +
+      'Os seguintes campos ficaram em branco e ficarão sem valor:\n' +
       faltando.join(', ') + '\n\nDeseja salvar assim mesmo ou prefere preencher antes?'
     );
     if (!continuar) return;
   }
 
   // Piquiri usa o nº da NF como código do fornecedor
-  let codFinal = cod;
-  if (!codFinal || codFinal === SEM_DADO) codFinal = notaFiscal || SEM_DADO;
+  const codFinal = cod || notaFiscal;
 
   for (let i = 0; i < qtd; i++) {
     bobinas.push({
       id: Date.now() + i,
-      notaFiscal: notaFiscal || SEM_DADO,
+      notaFiscal: notaFiscal,
       codFornecedor: codFinal,
       fornecedor: 'Piquiri',
       tipo: 'Capa',
