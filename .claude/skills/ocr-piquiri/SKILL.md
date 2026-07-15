@@ -9,10 +9,14 @@ description: Conhecimento da etiqueta Piquiri e do pipeline OCR do app de bobina
 
 Todas as etiquetas Piquiri seguem o mesmo modelo:
 
-- Parte de cima: MEDIDAS e GRAMATURA (gramatura em texto branco sobre faixa verde — o campo que mais some no OCR).
+- Faixa verde: CLIENTE/PRIME, `PESO LÍQ.: 720Kg` e GRAMATURA (texto branco sobre verde — o campo que mais some no OCR). Existe também PESO BRU na tabela de baixo; o padrão exige `PESO L` para não confundir.
+- Tabela de baixo: **4 colunas fixas, cada uma com 2 pares rótulo/valor empilhados**:
+  coluna 1 = NOTA FISCAL (valor) / MEDIDAS (valor); coluna 2 = PEDIDO / PALLET NÚMERO;
+  coluna 3 = DATA FABRIC. / BOBINA/PALLET; coluna 4 = PESO BRU. / LOTE.
+  Fisicamente NOTA FISCAL fica na MESMA COLUNA que MEDIDAS, uma linha acima do valor de MEDIDAS.
+- O Tesseract lê essa tabela por **banda horizontal** (todas as colunas daquela altura viram uma linha de texto), não coluna por coluna: linha 1 = os 4 rótulos da 1ª leira (NOTA FISCAL/PEDIDO/DATA FABRIC/PESO BRU), linha 2 = os 4 valores correspondentes, linha 3 = os 4 rótulos da 2ª leira (MEDIDAS/PALLET NÚMERO/...), linha 4 = os 4 valores.
 - `MEDIDAS: 750MM X 1100MM` → primeiro número = **formato**, segundo = **diâmetro**. O diâmetro tem sido sempre 1100.
-- `PESO LÍQ.: 720Kg` — existe também PESO BRU na tabela; o padrão exige `PESO L` para não confundir.
-- Parte de baixo é uma tabela: linha de rótulos (NOTA FISCAL / PEDIDO / DATA FABRIC / PESO BRU) e valores na linha **seguinte** — o valor quase nunca vem colado ao rótulo no texto OCR.
+- **"NOTA FISCAL" é o rótulo que mais sai mutilado** do OCR (às vezes vira só "NoT", perdendo "FISCAL" inteiro) — bem mais que "MEDIDAS", que costuma sobreviver mesmo truncado ("MEDID"). Por isso o código usa MEDIDAS como âncora de fallback para achar a NF (ver `regiaoAcimaDe`).
 
 ## Regras de negócio
 
@@ -44,6 +48,7 @@ Valor fora da faixa = leitura errada → descartar e reler.
 1. **Passada 1**: foto redimensionada a 2600px, escala de cinza SEM reforço de contraste (contraste estoura o texto branco da faixa verde), PSM 4, `recognize(canvas, {}, {text, blocks})`.
 2. **Parser** `parseEtiquetaPiquiri`: heurísticas sobre o texto corrido.
 3. **Releitura cirúrgica** `relerCamposDuvidosos`: campo em branco ou fora da faixa → recorta a região ao lado/abaixo do rótulo (bboxes das palavras do Tesseract), amplia 3x, relê com PSM 7, extrai por candidatos (cru primeiro, depois `letrasParaDigitos`) e aceita o primeiro na faixa plausível.
+   - **Nota Fiscal tem 3 tentativas em cascata**, do mais barato ao mais caro: (a) `notaFiscalPorPosicao` — acha um número solto de 4-9 dígitos no texto já lido, antes do bloco MEDIDAS, sem gastar nova chamada de imagem; (b) se o rótulo "FISCAL" foi reconhecido, recorta abaixo dele (`regiaoAbaixo`); (c) senão, recorta acima do rótulo "MEDID" (`regiaoAcimaDe`), que é a âncora mais confiável.
 4. O modal mostra o texto bruto + as releituras em "Ver texto lido na foto (debug)" — o usuário sabe copiar isso.
 
 ## Como calibrar / testar

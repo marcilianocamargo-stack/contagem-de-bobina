@@ -465,7 +465,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v16';
+const APP_VERSION = 'v17';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -1176,6 +1176,32 @@ function regiaoAbaixo(w) {
   };
 }
 
+// Região uma linha ACIMA de um rótulo. Usada para achar o nº da Nota Fiscal
+// a partir de MEDIDAS: na etiqueta Piquiri as duas ficam na mesma coluna,
+// duas linhas uma da outra (rótulo NF / valor NF / rótulo MEDIDAS / valor
+// MEDIDAS) — e "MEDIDAS" sai do OCR muito mais legível que "NOTA FISCAL".
+function regiaoAcimaDe(w, canvas) {
+  const h = w.bbox.y1 - w.bbox.y0;
+  return {
+    x: w.bbox.x0 - h * 0.3,
+    y: w.bbox.y0 - h * 2.6,
+    w: canvas.width * 0.24,
+    h: h * 1.8,
+  };
+}
+
+// Fallback sem imagem: quando "NOTA FISCAL" sai ilegível do OCR (ex.: vira
+// só "NoT"), o número às vezes já está no texto solto, sem rótulo reconhecido
+// junto. A NF é o primeiro número de 4-9 dígitos antes do bloco MEDIDAS,
+// descartando datas (dd/mm/aaaa) para não confundir com DATA FABRIC.
+function notaFiscalPorPosicao(t) {
+  const idxMed = t.search(/MEDID/i);
+  let trecho = idxMed === -1 ? t : t.slice(0, idxMed);
+  trecho = trecho.replace(/\d{1,2}\/\d{1,2}\/\d{4}/g, '');
+  const m = trecho.match(/\b(\d{4,9})\b/);
+  return m ? m[1] : '';
+}
+
 // Confere os campos da 1ª passada e relê os duvidosos. Altera `dados` no
 // lugar e devolve linhas de debug para o "Ver texto lido na foto".
 async function relerCamposDuvidosos(worker, canvas, data, dados) {
@@ -1219,8 +1245,18 @@ async function relerCamposDuvidosos(worker, canvas, data, dados) {
     if (rot) tarefas.push({ campo: 'medidas', regiao: regiaoAoLado(rot, canvas, 0.5) });
   }
   if (!dados.notaFiscal) {
-    const rot = acha(/FISCAL/i);
-    if (rot) tarefas.push({ campo: 'notaFiscal', regiao: regiaoAbaixo(rot) });
+    // Antes de recortar imagem, tenta achar o número já solto no texto —
+    // caso comum quando o rótulo "NOTA FISCAL" saiu ilegível mas o valor não.
+    const viaTexto = notaFiscalPorPosicao((data && data.text) || '');
+    if (viaTexto && FAIXAS_PIQUIRI.notaFiscal(viaTexto)) {
+      dados.notaFiscal = viaTexto;
+      debug.push('notaFiscal por posição no texto: "' + viaTexto + '"');
+    } else {
+      const rotFiscal  = acha(/FISCAL/i);
+      const rotMedidas = acha(/MEDID/i);
+      if (rotFiscal)       tarefas.push({ campo: 'notaFiscal', regiao: regiaoAbaixo(rotFiscal) });
+      else if (rotMedidas) tarefas.push({ campo: 'notaFiscal', regiao: regiaoAcimaDe(rotMedidas, canvas) });
+    }
   }
 
   if (!tarefas.length) return debug;
@@ -1229,6 +1265,10 @@ async function relerCamposDuvidosos(worker, canvas, data, dados) {
   await worker.setParameters({ tessedit_pageseg_mode: '7' });
   try {
     for (const t of tarefas) {
+      // Campo já preenchido por uma tarefa anterior (ex.: notaFiscal por
+      // texto) — pula o recorte, que é o passo mais caro.
+      if (dados[t.campo] && FAIXAS_PIQUIRI[t.campo] && FAIXAS_PIQUIRI[t.campo](dados[t.campo])) continue;
+
       const txt = await ocrRecorte(worker, canvas, t.regiao);
       debug.push(t.campo + ' releitura: "' + txt + '"');
       if (!txt) continue;
