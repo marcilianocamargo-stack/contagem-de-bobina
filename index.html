@@ -335,6 +335,13 @@ select:focus, input:focus {
     <input type="file" id="inputCameraPiquiri" accept="image/*" capture="environment" style="display:none">
     <input type="file" id="inputGaleriaPiquiri" accept="image/*" style="display:none">
 
+    <div id="wrapOcrNovacki" style="display:none">
+      <button type="button" class="btn btn-roxo" onclick="abrirCameraNovacki()">📷&nbsp;&nbsp;ESCANEAR ETIQUETA (OCR)</button>
+      <button type="button" class="btn btn-roxo" style="margin-top:10px" onclick="abrirGaleriaNovacki()">🖼&nbsp;&nbsp;LER FOTO DA GALERIA (OCR)</button>
+    </div>
+    <input type="file" id="inputCameraNovacki" accept="image/*" capture="environment" style="display:none">
+    <input type="file" id="inputGaleriaNovacki" accept="image/*" style="display:none">
+
     <label class="lbl">Nota Fiscal</label>
     <input type="text" id="notaFiscal" placeholder="Ex: 12345" inputmode="numeric" autocomplete="off">
 
@@ -416,7 +423,7 @@ select:focus, input:focus {
 
 <div class="modal-overlay" id="modalOcr">
   <div class="modal-box">
-    <div class="modal-title">📷 Conferir Etiqueta Piquiri</div>
+    <div class="modal-title" id="modalOcrTitulo">📷 Conferir Etiqueta</div>
     <div class="ocr-status" id="ocrStatus">🔍 Lendo etiqueta, aguarde...</div>
     <div id="ocrCampos" style="display:none">
       <label class="lbl" style="margin-top:0">Nota Fiscal</label>
@@ -424,6 +431,15 @@ select:focus, input:focus {
 
       <label class="lbl">Cód. Fornecedor</label>
       <input type="text" id="ocrCodFornecedor" placeholder="(vazio)">
+
+      <div id="wrapOcrTipo" style="display:none">
+        <label class="lbl">Tipo</label>
+        <select id="ocrTipo">
+          <option value="">— Selecione o tipo —</option>
+          <option value="Capa">Capa</option>
+          <option value="Miolo">Miolo</option>
+        </select>
+      </div>
 
       <div class="grid3">
         <div>
@@ -465,7 +481,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v17';
+const APP_VERSION = 'v18';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -535,21 +551,28 @@ function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').re
 
 function aoDigitarFornecedor() {
   const forn = document.getElementById('fornecedor').value.trim().toLowerCase();
-  const wrapTipo  = document.getElementById('wrapTipo');
-  const selTipo   = document.getElementById('tipo');
-  const codInput  = document.getElementById('codFornecedor');
-  const wrapOcr   = document.getElementById('wrapOcrPiquiri');
+  const wrapTipo    = document.getElementById('wrapTipo');
+  const selTipo     = document.getElementById('tipo');
+  const codInput    = document.getElementById('codFornecedor');
+  const wrapOcrPiq  = document.getElementById('wrapOcrPiquiri');
+  const wrapOcrNov  = document.getElementById('wrapOcrNovacki');
+  wrapOcrPiq.style.display = 'none';
+  wrapOcrNov.style.display = 'none';
   if (forn === 'piquiri') {
     selTipo.value = 'Capa';
     wrapTipo.style.display = 'none';
     codInput.inputMode = 'numeric';
     codInput.placeholder = 'Ex: 26877';
-    wrapOcr.style.display = 'block';
+    wrapOcrPiq.style.display = 'block';
+  } else if (forn === 'novacki') {
+    wrapTipo.style.display = 'block';
+    codInput.inputMode = 'numeric';
+    codInput.placeholder = 'Ex: 0117992001';
+    wrapOcrNov.style.display = 'block';
   } else {
     wrapTipo.style.display = 'block';
     codInput.inputMode = 'text';
     codInput.placeholder = 'Ex: AB1234';
-    wrapOcr.style.display = 'none';
   }
 }
 
@@ -623,6 +646,7 @@ function limparFormulario() {
   document.getElementById('quantidade').value = '1';
   document.getElementById('wrapTipo').style.display = 'block';
   document.getElementById('wrapOcrPiquiri').style.display = 'none';
+  document.getElementById('wrapOcrNovacki').style.display = 'none';
   document.getElementById('msgBobina').style.display = 'none';
 }
 
@@ -973,12 +997,19 @@ async function gerarExcel() {
   URL.revokeObjectURL(url);
 }
 
-// ==================== OCR ETIQUETA PIQUIRI ====================
+// ==================== OCR ETIQUETA (PIQUIRI / NOVACKI) ====================
 
-document.getElementById('inputCameraPiquiri').addEventListener('change', processarFotoEtiqueta);
-document.getElementById('inputGaleriaPiquiri').addEventListener('change', processarFotoEtiqueta);
+// Qual fornecedor disparou o OCR atualmente aberto no modal — decide qual
+// parser usar e como salvar a bobina ao confirmar.
+let ocrFornecedorAtual = 'piquiri';
+
+document.getElementById('inputCameraPiquiri').addEventListener('change', e => processarFotoEtiqueta(e, 'piquiri'));
+document.getElementById('inputGaleriaPiquiri').addEventListener('change', e => processarFotoEtiqueta(e, 'piquiri'));
+document.getElementById('inputCameraNovacki').addEventListener('change', e => processarFotoEtiqueta(e, 'novacki'));
+document.getElementById('inputGaleriaNovacki').addEventListener('change', e => processarFotoEtiqueta(e, 'novacki'));
 
 function abrirCameraPiquiri() {
+  ocrFornecedorAtual = 'piquiri';
   document.getElementById('inputCameraPiquiri').value = '';
   document.getElementById('inputCameraPiquiri').click();
 }
@@ -986,11 +1017,26 @@ function abrirCameraPiquiri() {
 // Fluxo recomendado: fotografar a etiqueta com o modo "Documentos" da câmera
 // do celular (corta, alinha e tira reflexo) e depois ler a foto da galeria.
 function abrirGaleriaPiquiri() {
+  ocrFornecedorAtual = 'piquiri';
   document.getElementById('inputGaleriaPiquiri').value = '';
   document.getElementById('inputGaleriaPiquiri').click();
 }
 
+function abrirCameraNovacki() {
+  ocrFornecedorAtual = 'novacki';
+  document.getElementById('inputCameraNovacki').value = '';
+  document.getElementById('inputCameraNovacki').click();
+}
+
+function abrirGaleriaNovacki() {
+  ocrFornecedorAtual = 'novacki';
+  document.getElementById('inputGaleriaNovacki').value = '';
+  document.getElementById('inputGaleriaNovacki').click();
+}
+
 function abrirModalOcr() {
+  document.getElementById('modalOcrTitulo').textContent =
+    ocrFornecedorAtual === 'novacki' ? '📷 Conferir Etiqueta Novacki' : '📷 Conferir Etiqueta Piquiri';
   document.getElementById('ocrStatus').textContent = '🔍 Lendo etiqueta, aguarde...\n(pode levar alguns segundos)';
   document.getElementById('ocrStatus').style.display = 'block';
   document.getElementById('ocrCampos').style.display = 'none';
@@ -1001,6 +1047,8 @@ function fecharModalOcr() {
   document.getElementById('modalOcr').classList.remove('show');
   document.getElementById('inputCameraPiquiri').value = '';
   document.getElementById('inputGaleriaPiquiri').value = '';
+  document.getElementById('inputCameraNovacki').value = '';
+  document.getElementById('inputGaleriaNovacki').value = '';
 }
 
 // Redimensiona a foto antes do OCR. Calibrado com 20 etiquetas reais:
@@ -1064,28 +1112,51 @@ function obterWorkerOcr() {
   return ocrWorkerPromise;
 }
 
-async function processarFotoEtiqueta(event) {
+async function processarFotoEtiqueta(event, fornecedorOcr) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
+  ocrFornecedorAtual = fornecedorOcr || 'piquiri';
   abrirModalOcr();
+
+  const wrapTipoOcr = document.getElementById('wrapOcrTipo');
+  wrapTipoOcr.style.display = ocrFornecedorAtual === 'novacki' ? 'block' : 'none';
 
   try {
     const canvasFoto = await redimensionarImagem(file, 2600);
     const worker = await obterWorkerOcr();
     // blocks:true traz a posição de cada palavra — é o que permite recortar
     // a região exata de um campo mal lido e reler só aquele pedaço.
+    // PSM 6 (bloco uniforme de texto) lê a etiqueta Novacki bem melhor que o
+    // modo 4 padrão, que some com a linha de rótulos LARGURA/DIÂMETRO/CÓDIGO.
+    if (ocrFornecedorAtual === 'novacki') await worker.setParameters({ tessedit_pageseg_mode: '6' });
     const resultado = await worker.recognize(canvasFoto, {}, { text: true, blocks: true });
+    if (ocrFornecedorAtual === 'novacki') await worker.setParameters({ tessedit_pageseg_mode: '4' });
     const texto = (resultado && resultado.data && resultado.data.text) || '';
-    const dados = parseEtiquetaPiquiri(texto);
-    const debugReleitura = await relerCamposDuvidosos(worker, canvasFoto, resultado.data, dados);
+
+    let dados, debugReleitura;
+    if (ocrFornecedorAtual === 'novacki') {
+      dados = parseEtiquetaNovacki(texto);
+      debugReleitura = await relerCamposNovacki(worker, canvasFoto, resultado.data, dados);
+    } else {
+      dados = parseEtiquetaPiquiri(texto);
+      debugReleitura = await relerCamposDuvidosos(worker, canvasFoto, resultado.data, dados);
+    }
 
     // Campos que o OCR não conseguiu ler ficam em branco para conferência.
-    // Piquiri não tem código de fornecedor próprio: usa-se o nº da NF.
-    document.getElementById('ocrNotaFiscal').value    = dados.notaFiscal || '';
-    document.getElementById('ocrCodFornecedor').value = dados.notaFiscal || '';
+    if (ocrFornecedorAtual === 'novacki') {
+      // Novacki não imprime Nota Fiscal na etiqueta: quem identifica a
+      // bobina é o CÓDIGO próprio dela.
+      document.getElementById('ocrNotaFiscal').value    = '';
+      document.getElementById('ocrCodFornecedor').value = dados.codFornecedor || '';
+      document.getElementById('ocrTipo').value          = dados.tipo || '';
+    } else {
+      // Piquiri não tem código de fornecedor próprio: usa-se o nº da NF.
+      document.getElementById('ocrNotaFiscal').value    = dados.notaFiscal || '';
+      document.getElementById('ocrCodFornecedor').value = dados.notaFiscal || '';
+    }
     document.getElementById('ocrFormato').value       = dados.formato || '';
     document.getElementById('ocrDiametro').value      = dados.diametro || '';
-    document.getElementById('ocrGramatura').value     = dados.gramatura || '';
+    document.getElementById('ocrGramatura').value      = dados.gramatura || '';
     document.getElementById('ocrPeso').value          = dados.peso || '';
     document.getElementById('ocrQuantidade').value    = 1;
     document.getElementById('ocrTextoBruto').textContent =
@@ -1402,21 +1473,248 @@ function parseEtiquetaPiquiri(textoOriginal) {
   return { notaFiscal, formato, diametro, gramatura, peso };
 }
 
+// ==================== OCR ETIQUETA NOVACKI ====================
+// A etiqueta Novacki é uma tabela impressa a laser, alto contraste: cada
+// campo tem o rótulo pequeno em cima e o valor grande e em negrito logo
+// abaixo, dentro da mesma célula — bem mais uniforme que a Piquiri.
+//
+// Duas descobertas guiaram esta implementação, calibradas testando as 7
+// fotos reais de etiquetas Novacki disponíveis:
+// 1) O texto inteiro da etiqueta em uma única passada perde justamente os
+//    valores grandes (LARGURA/DIÂMETRO/CÓDIGO/PESO) com o worker 'por' —
+//    então cada valor é recortado e lido separadamente, olhando a região
+//    logo abaixo do rótulo correspondente (achado pela posição do rótulo
+//    na passada de página inteira).
+// 2) Para esses recortes puramente numéricos, o worker em português com o
+//    modo padrão erra dígitos de forma consistente (ex.: 0↔N, 9↔0). Um
+//    worker separado em inglês, PSM 8 (palavra única) + modo numérico do
+//    Tesseract + whitelist de dígitos, acerta de forma muito mais confiável.
+const FAIXAS_NOVACKI = {
+  formato:       v => { const n = parseInt(v, 10); return n >= 200 && n <= 3000; },
+  diametro:      v => { const n = parseInt(v, 10); return n >= 500 && n <= 2000; },
+  gramatura:     v => { const n = parseInt(v, 10); return n >= 40  && n <= 450;  },
+  peso:          v => { const n = parseFloat(v);   return n >= 50  && n <= 5000; },
+  codFornecedor: v => /^\d{6,12}$/.test(v),
+};
+
+// Altura típica (px) do texto de um rótulo na etiqueta Novacki, calibrada
+// nas etiquetas vistas até hoje. Em fotos com reflexo/dobra do plástico o
+// Tesseract às vezes funde o bbox do rótulo com o valor abaixo dele
+// (bbox anormalmente alto) — usar essa altura fixa como 2ª tentativa evita
+// que o recorte saia todo errado nesses casos.
+const NOVACKI_H_ROTULO = 68;
+
+// Worker dedicado para os recortes numéricos, criado uma vez e reaproveitado.
+let ocrWorkerNumericoPromise = null;
+function obterWorkerOcrNumerico() {
+  if (!ocrWorkerNumericoPromise) {
+    ocrWorkerNumericoPromise = (async () => {
+      const worker = await Tesseract.createWorker('eng', 1, {});
+      await worker.setParameters({
+        tessedit_pageseg_mode: '8',
+        classify_bln_numeric_mode: '1',
+        tessedit_char_whitelist: '0123456789.,',
+      });
+      return worker;
+    })();
+    ocrWorkerNumericoPromise.catch(() => { ocrWorkerNumericoPromise = null; });
+  }
+  return ocrWorkerNumericoPromise;
+}
+
+// Extrai Tipo (Capa/Miolo) e a gramatura nominal a partir da linha do
+// "PAPEL:" (ex.: "ML100TRADE - MIOLO 100 TRADE" → Miolo / 100). Essa linha
+// vem em fonte grande e é lida de forma confiável já na passada de texto
+// inteiro — ao contrário dos campos da tabela LARGURA/DIÂMETRO/CÓDIGO/PESO,
+// que precisam do recorte cirúrgico feito em relerCamposNovacki.
+function parseEtiquetaNovacki(textoOriginal) {
+  const t = String(textoOriginal || '').replace(/\r/g, '');
+
+  let tipo = '';
+  const mTipo = t.match(/\b(CAPA|MIOLO)\b/i);
+  if (mTipo) tipo = mTipo[1][0].toUpperCase() + mTipo[1].slice(1).toLowerCase();
+
+  let gramatura = '';
+  const mGram = t.match(/(\d{2,3})\s*TRADE/i);
+  if (mGram) gramatura = mGram[1];
+
+  return { tipo, gramatura, formato: '', diametro: '', codFornecedor: '', peso: '' };
+}
+
+// Região logo abaixo de um rótulo. `hOverride`, quando informado, ignora a
+// altura do bbox detectado (usada como 2ª tentativa quando esse bbox saiu
+// anormalmente grande, sinal de que o Tesseract fundiu rótulo e valor).
+function regiaoValorNovacki(w, canvas, margemEsq, larguraMin, larguraMult, alturaMult, hOverride) {
+  const h = hOverride || (w.bbox.y1 - w.bbox.y0);
+  const lw = w.bbox.x1 - w.bbox.x0;
+  const x = Math.max(0, Math.round(w.bbox.x0 - h * margemEsq));
+  const larguraCalc = Math.min(canvas.width - x, Math.round(Math.max(lw * larguraMult, larguraMin)));
+  const yBase = hOverride ? (w.bbox.y0 + hOverride) : w.bbox.y1;
+  const y = Math.max(0, Math.round(yBase + h * 0.02));
+  return { x, y, w: larguraCalc, h: Math.round(h * alturaMult) };
+}
+
+// Região do valor do PESO usando o perfil de tinta (conta pixels escuros por
+// linha) em vez de uma altura fixa: como o rótulo "PESO:" varia um pouco de
+// tamanho entre fotos, mirar a lacuna em branco real entre o rótulo e o
+// valor evita cortar o topo dos dígitos grandes.
+function regiaoPesoPorPerfil(canvas, label) {
+  const ctx = canvas.getContext('2d');
+  const h = label.bbox.y1 - label.bbox.y0;
+  const x0 = Math.max(0, Math.round(label.bbox.x0 - h * 0.3));
+  const largura = Math.min(canvas.width - x0, Math.round(Math.max((label.bbox.x1 - label.bbox.x0) * 3.4, 650)));
+  const yTopo = label.bbox.y1;
+  const yFim = Math.min(canvas.height, yTopo + Math.round(h * 4.5));
+  const altura = yFim - yTopo;
+  if (altura < 6 || largura < 6) return null;
+  const px = ctx.getImageData(x0, yTopo, largura, altura).data;
+  const escurosPorLinha = new Array(altura).fill(0);
+  for (let row = 0; row < altura; row++) {
+    let escuros = 0;
+    for (let col = 0; col < largura; col++) {
+      if (px[(row * largura + col) * 4] < 130) escuros++;
+    }
+    escurosPorLinha[row] = escuros;
+  }
+  const limiar = Math.max(2, largura * 0.008);
+  let i = 0;
+  while (i < altura && escurosPorLinha[i] >= limiar) i++; // pula resíduo do rótulo colado
+  while (i < altura && escurosPorLinha[i] < limiar) i++;  // pula a lacuna em branco
+  const inicioValor = i;
+  if (inicioValor >= altura) return null;
+  let fim = altura, brancoSeguido = 0;
+  for (; i < altura; i++) {
+    if (escurosPorLinha[i] < limiar) {
+      brancoSeguido++;
+      if (brancoSeguido > Math.max(4, h * 0.35)) { fim = i - brancoSeguido + 1; break; }
+    } else brancoSeguido = 0;
+  }
+  if (inicioValor >= fim) return null;
+  return { x: x0, y: yTopo + Math.max(0, inicioValor - 3), w: largura, h: (fim - inicioValor) + 6 };
+}
+
+// Lê um número que pode ter vindo "cortado" pelo separador de milhar do OCR
+// (ex.: "1.2000" em vez de "1.200"): se houver um ponto/vírgula decimal
+// seguido de exatamente 3 dígitos, usa só esses 4 dígitos; senão pega o
+// primeiro grupo de 2-4 dígitos encontrado.
+function limparNumeroCortadoNovacki(txt) {
+  let m = txt.match(/(\d)[.,](\d{3})/);
+  if (m) return m[1] + m[2];
+  m = txt.match(/(\d{2,4})/);
+  return m ? m[1] : '';
+}
+
+// O CÓDIGO da Novacki observado até hoje sempre começa com "0117" (10
+// dígitos) — o dígito 0 inicial é o mais comum de "sumir" na leitura (o
+// crop já tem margem extra à esquerda para evitar isso, mas quando ainda
+// assim falta, este reparo é seguro porque só completa um padrão já bem
+// definido, nunca inventa dígitos do meio.
+function repararCodigoNovacki(digitos) {
+  if (/^0117\d{6}$/.test(digitos)) return digitos;
+  if (/^117\d{6}$/.test(digitos)) return '0' + digitos;
+  return digitos;
+}
+
+// Tenta uma lista de geometrias de recorte em ordem, guardando toda leitura
+// plausível (dentro da FAIXA do campo). cada geometria é uma função (sem
+// argumentos) que devolve a região {x,y,w,h} ou null.
+//
+// Para a maioria dos campos a primeira leitura plausível já basta — mas o
+// Cód. Fornecedor tem um padrão fixo observado nas etiquetas (10 dígitos
+// começando com "0117") que nem sempre bate logo na 1ª geometria: às vezes
+// ela lê um valor plausível-mas-errado (passa na FAIXA solta de 6-12
+// dígitos) enquanto a 2ª geometria acerta em cheio. Por isso, para esse
+// campo todas as geometrias são testadas e prefere-se a que casar
+// exatamente com esse padrão; nos demais campos a 1ª leitura válida já
+// encerra a busca (evita OCR extra sem necessidade).
+async function lerCampoNovacki(engWorker, canvasFoto, campo, geometrias, debug) {
+  const candidatos = [];
+  for (const gerarRegiao of geometrias) {
+    const r = gerarRegiao();
+    if (!r) continue;
+    const crop = document.createElement('canvas');
+    crop.width = r.w * 2;
+    crop.height = r.h * 2;
+    crop.getContext('2d').drawImage(canvasFoto, r.x, r.y, r.w, r.h, 0, 0, crop.width, crop.height);
+    const txt = (await engWorker.recognize(crop)).data.text.trim();
+    let valor = campo === 'codFornecedor' ? txt.replace(/[^\d]/g, '') : limparNumeroCortadoNovacki(txt);
+    if (campo === 'codFornecedor') valor = repararCodigoNovacki(valor);
+    debug.push(campo + ' recorte: "' + txt + '" → ' + (valor || '(nada)'));
+    if (!valor || !FAIXAS_NOVACKI[campo](valor)) continue;
+    if (campo !== 'codFornecedor') return valor;
+    candidatos.push(valor);
+    if (/^0117\d{6}$/.test(valor)) return valor;
+  }
+  return candidatos[0] || '';
+}
+
+// Lê Formato, Diâmetro, Cód. Fornecedor e Peso recortando a região do valor
+// abaixo de cada rótulo (posições vindas da passada de página inteira em
+// `data`) e relendo com o worker numérico dedicado. Preenche `dados` no
+// lugar e devolve linhas de debug para o "Ver texto lido na foto".
+async function relerCamposNovacki(worker, canvasFoto, data, dados) {
+  const debug = [];
+  const palavras = coletarPalavras(data);
+  if (!palavras.length) return debug;
+  const acha = re => palavras.find(p => re.test(p.text));
+  const engWorker = await obterWorkerOcrNumerico();
+
+  const wL = acha(/^LARGURA/i);
+  if (wL) dados.formato = await lerCampoNovacki(engWorker, canvasFoto, 'formato', [
+    () => regiaoValorNovacki(wL, canvasFoto, 0.3, 650, 3.2, 1.8),
+    () => regiaoValorNovacki(wL, canvasFoto, 0.3, 650, 3.2, 1.8, NOVACKI_H_ROTULO),
+  ], debug);
+
+  const wD = acha(/^DI.?METRO/i);
+  if (wD) dados.diametro = await lerCampoNovacki(engWorker, canvasFoto, 'diametro', [
+    () => regiaoValorNovacki(wD, canvasFoto, 0.3, 650, 3.2, 1.8),
+    () => regiaoValorNovacki(wD, canvasFoto, 0.3, 650, 3.2, 1.8, NOVACKI_H_ROTULO),
+  ], debug);
+
+  const wC = acha(/^C.?DIGO/i);
+  if (wC) dados.codFornecedor = await lerCampoNovacki(engWorker, canvasFoto, 'codFornecedor', [
+    () => regiaoValorNovacki(wC, canvasFoto, 0.7, 700, 3.4, 1.9),
+    () => regiaoValorNovacki(wC, canvasFoto, 0.7, 700, 3.4, 1.9, NOVACKI_H_ROTULO),
+  ], debug);
+
+  // "PESO:" às vezes sai mutilado da leitura (ex.: "lneso") — /eso/i acha o
+  // rótulo mesmo assim, já que essa sequência de letras é praticamente
+  // exclusiva desse rótulo na etiqueta.
+  const wP = acha(/eso/i);
+  if (wP) dados.peso = await lerCampoNovacki(engWorker, canvasFoto, 'peso', [
+    () => regiaoPesoPorPerfil(canvasFoto, wP),
+    () => regiaoValorNovacki(wP, canvasFoto, 0.3, 650, 3.2, 1.8),
+    () => regiaoValorNovacki(wP, canvasFoto, 0.3, 650, 3.2, 1.8, NOVACKI_H_ROTULO),
+  ], debug);
+
+  return debug;
+}
+
 function confirmarSalvarOcr() {
+  const ehNovacki  = ocrFornecedorAtual === 'novacki';
   const notaFiscal = document.getElementById('ocrNotaFiscal').value.trim();
   const cod        = document.getElementById('ocrCodFornecedor').value.trim();
+  const tipoSel    = document.getElementById('ocrTipo').value;
   const fmt_       = document.getElementById('ocrFormato').value.trim();
   const diam       = document.getElementById('ocrDiametro').value.trim();
   const gram       = document.getElementById('ocrGramatura').value.trim();
   const peso       = document.getElementById('ocrPeso').value.trim();
   const qtd        = parseInt(document.getElementById('ocrQuantidade').value) || 1;
 
+  if (ehNovacki && !tipoSel) {
+    alert('⚠ Selecione o Tipo (Capa ou Miolo) antes de salvar!');
+    return;
+  }
+
   const faltando = [];
-  if (!notaFiscal) faltando.push('Nota Fiscal');
-  if (!fmt_)       faltando.push('Formato');
-  if (!diam)       faltando.push('Diâmetro');
-  if (!gram)       faltando.push('Gramatura');
-  if (!peso)       faltando.push('Peso Líquido');
+  // Novacki não imprime Nota Fiscal na etiqueta — só o Cód. Fornecedor
+  // (CÓDIGO) identifica a bobina, então não faz sentido cobrar a NF aqui.
+  if (!ehNovacki && !notaFiscal) faltando.push('Nota Fiscal');
+  if (ehNovacki && !cod)         faltando.push('Cód. Fornecedor');
+  if (!fmt_)  faltando.push('Formato');
+  if (!diam)  faltando.push('Diâmetro');
+  if (!gram)  faltando.push('Gramatura');
+  if (!peso)  faltando.push('Peso Líquido');
 
   if (faltando.length > 0) {
     const continuar = confirm(
@@ -1426,16 +1724,19 @@ function confirmarSalvarOcr() {
     if (!continuar) return;
   }
 
-  // Piquiri usa o nº da NF como código do fornecedor
-  const codFinal = cod || notaFiscal;
+  // Piquiri não tem código próprio: usa o nº da NF. Novacki é o contrário —
+  // tem CÓDIGO próprio impresso e não tem NF na etiqueta.
+  const codFinal = ehNovacki ? cod : (cod || notaFiscal);
+  const fornecedorFinal = ehNovacki ? 'Novacki' : 'Piquiri';
+  const tipoFinal = ehNovacki ? tipoSel : 'Capa';
 
   for (let i = 0; i < qtd; i++) {
     bobinas.push({
       id: Date.now() + i,
-      notaFiscal: notaFiscal,
+      notaFiscal: ehNovacki ? '' : notaFiscal,
       codFornecedor: codFinal,
-      fornecedor: 'Piquiri',
-      tipo: 'Capa',
+      fornecedor: fornecedorFinal,
+      tipo: tipoFinal,
       formato: parseFloat(fmt_) || 0,
       diametro: parseFloat(diam) || 0,
       gramatura: parseFloat(gram) || 0,
@@ -1447,8 +1748,8 @@ function confirmarSalvarOcr() {
   renderLista();
   fecharModalOcr();
   mostrarFlash(qtd > 1
-    ? '✓ ' + qtd + ' Bobinas Salvas!\nPiquiri · OCR'
-    : '✓ Bobina Salva!\nPiquiri · OCR');
+    ? '✓ ' + qtd + ' Bobinas Salvas!\n' + fornecedorFinal + ' · OCR'
+    : '✓ Bobina Salva!\n' + fornecedorFinal + ' · OCR');
 }
 
 function mostrarMsg(txt, tipo) {
