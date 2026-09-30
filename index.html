@@ -323,6 +323,7 @@ select:focus, input:focus {
       <option value="Paraibuna">
       <option value="HP">
       <option value="Novacki">
+      <option value="Porto">
       <option value="Íris">
       <option value="Klabin">
       <option value="Suzano">
@@ -335,12 +336,12 @@ select:focus, input:focus {
     <input type="file" id="inputCameraPiquiri" accept="image/*" capture="environment" style="display:none">
     <input type="file" id="inputGaleriaPiquiri" accept="image/*" style="display:none">
 
-    <div id="wrapOcrNovacki" style="display:none">
-      <button type="button" class="btn btn-roxo" onclick="abrirCameraNovacki()">📷&nbsp;&nbsp;ESCANEAR ETIQUETA (OCR)</button>
-      <button type="button" class="btn btn-roxo" style="margin-top:10px" onclick="abrirGaleriaNovacki()">🖼&nbsp;&nbsp;LER FOTO DA GALERIA (OCR)</button>
+    <div id="wrapOcrGemini" style="display:none">
+      <button type="button" class="btn btn-roxo" onclick="abrirCameraGemini()">📷&nbsp;&nbsp;ESCANEAR ETIQUETA (OCR)</button>
+      <button type="button" class="btn btn-roxo" style="margin-top:10px" onclick="abrirGaleriaGemini()">🖼&nbsp;&nbsp;LER FOTO DA GALERIA (OCR)</button>
     </div>
-    <input type="file" id="inputCameraNovacki" accept="image/*" capture="environment" style="display:none">
-    <input type="file" id="inputGaleriaNovacki" accept="image/*" style="display:none">
+    <input type="file" id="inputCameraGemini" accept="image/*" capture="environment" style="display:none">
+    <input type="file" id="inputGaleriaGemini" accept="image/*" style="display:none">
 
     <label class="lbl">Nota Fiscal</label>
     <input type="text" id="notaFiscal" placeholder="Ex: 12345" inputmode="numeric" autocomplete="off">
@@ -481,7 +482,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v18';
+const APP_VERSION = 'v19';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -555,24 +556,22 @@ function aoDigitarFornecedor() {
   const selTipo     = document.getElementById('tipo');
   const codInput    = document.getElementById('codFornecedor');
   const wrapOcrPiq  = document.getElementById('wrapOcrPiquiri');
-  const wrapOcrNov  = document.getElementById('wrapOcrNovacki');
+  const wrapOcrGem  = document.getElementById('wrapOcrGemini');
   wrapOcrPiq.style.display = 'none';
-  wrapOcrNov.style.display = 'none';
+  wrapOcrGem.style.display = 'none';
   if (forn === 'piquiri') {
     selTipo.value = 'Capa';
     wrapTipo.style.display = 'none';
     codInput.inputMode = 'numeric';
     codInput.placeholder = 'Ex: 26877';
     wrapOcrPiq.style.display = 'block';
-  } else if (forn === 'novacki') {
-    wrapTipo.style.display = 'block';
-    codInput.inputMode = 'numeric';
-    codInput.placeholder = 'Ex: 0117992001';
-    wrapOcrNov.style.display = 'block';
   } else {
     wrapTipo.style.display = 'block';
-    codInput.inputMode = 'text';
-    codInput.placeholder = 'Ex: AB1234';
+    codInput.inputMode = forn === 'novacki' || forn === 'porto' ? 'numeric' : 'text';
+    codInput.placeholder = forn === 'novacki' ? 'Ex: 0117992001'
+      : forn === 'porto' ? 'Ex: 42512' : 'Ex: AB1234';
+    // Qualquer fornecedor que não seja a Piquiri lê a etiqueta via n8n + Gemini.
+    if (forn) wrapOcrGem.style.display = 'block';
   }
 }
 
@@ -646,7 +645,7 @@ function limparFormulario() {
   document.getElementById('quantidade').value = '1';
   document.getElementById('wrapTipo').style.display = 'block';
   document.getElementById('wrapOcrPiquiri').style.display = 'none';
-  document.getElementById('wrapOcrNovacki').style.display = 'none';
+  document.getElementById('wrapOcrGemini').style.display = 'none';
   document.getElementById('msgBobina').style.display = 'none';
 }
 
@@ -997,7 +996,7 @@ async function gerarExcel() {
   URL.revokeObjectURL(url);
 }
 
-// ==================== OCR ETIQUETA (PIQUIRI / NOVACKI) ====================
+// ==================== OCR ETIQUETA (PIQUIRI / NOVACKI / PORTO) ====================
 
 // Qual fornecedor disparou o OCR atualmente aberto no modal — decide qual
 // parser usar e como salvar a bobina ao confirmar.
@@ -1005,8 +1004,8 @@ let ocrFornecedorAtual = 'piquiri';
 
 document.getElementById('inputCameraPiquiri').addEventListener('change', e => processarFotoEtiqueta(e, 'piquiri'));
 document.getElementById('inputGaleriaPiquiri').addEventListener('change', e => processarFotoEtiqueta(e, 'piquiri'));
-document.getElementById('inputCameraNovacki').addEventListener('change', e => processarFotoEtiqueta(e, 'novacki'));
-document.getElementById('inputGaleriaNovacki').addEventListener('change', e => processarFotoEtiqueta(e, 'novacki'));
+document.getElementById('inputCameraGemini').addEventListener('change', e => processarFotoEtiqueta(e, 'gemini'));
+document.getElementById('inputGaleriaGemini').addEventListener('change', e => processarFotoEtiqueta(e, 'gemini'));
 
 function abrirCameraPiquiri() {
   ocrFornecedorAtual = 'piquiri';
@@ -1022,21 +1021,22 @@ function abrirGaleriaPiquiri() {
   document.getElementById('inputGaleriaPiquiri').click();
 }
 
-function abrirCameraNovacki() {
-  ocrFornecedorAtual = 'novacki';
-  document.getElementById('inputCameraNovacki').value = '';
-  document.getElementById('inputCameraNovacki').click();
+function abrirCameraGemini() {
+  ocrFornecedorAtual = 'gemini';
+  document.getElementById('inputCameraGemini').value = '';
+  document.getElementById('inputCameraGemini').click();
 }
 
-function abrirGaleriaNovacki() {
-  ocrFornecedorAtual = 'novacki';
-  document.getElementById('inputGaleriaNovacki').value = '';
-  document.getElementById('inputGaleriaNovacki').click();
+function abrirGaleriaGemini() {
+  ocrFornecedorAtual = 'gemini';
+  document.getElementById('inputGaleriaGemini').value = '';
+  document.getElementById('inputGaleriaGemini').click();
 }
 
 function abrirModalOcr() {
-  document.getElementById('modalOcrTitulo').textContent =
-    ocrFornecedorAtual === 'novacki' ? '📷 Conferir Etiqueta Novacki' : '📷 Conferir Etiqueta Piquiri';
+  document.getElementById('modalOcrTitulo').textContent = ocrFornecedorAtual === 'gemini'
+    ? '📷 Conferir Etiqueta ' + (document.getElementById('fornecedor').value.trim() || '')
+    : '📷 Conferir Etiqueta Piquiri';
   document.getElementById('ocrStatus').textContent = '🔍 Lendo etiqueta, aguarde...\n(pode levar alguns segundos)';
   document.getElementById('ocrStatus').style.display = 'block';
   document.getElementById('ocrCampos').style.display = 'none';
@@ -1047,8 +1047,8 @@ function fecharModalOcr() {
   document.getElementById('modalOcr').classList.remove('show');
   document.getElementById('inputCameraPiquiri').value = '';
   document.getElementById('inputGaleriaPiquiri').value = '';
-  document.getElementById('inputCameraNovacki').value = '';
-  document.getElementById('inputGaleriaNovacki').value = '';
+  document.getElementById('inputCameraGemini').value = '';
+  document.getElementById('inputGaleriaGemini').value = '';
 }
 
 // Redimensiona a foto antes do OCR. Calibrado com 20 etiquetas reais:
@@ -1119,7 +1119,15 @@ async function processarFotoEtiqueta(event, fornecedorOcr) {
   abrirModalOcr();
 
   const wrapTipoOcr = document.getElementById('wrapOcrTipo');
-  wrapTipoOcr.style.display = ocrFornecedorAtual === 'novacki' ? 'block' : 'none';
+  wrapTipoOcr.style.display = ocrFornecedorAtual === 'gemini' ? 'block' : 'none';
+
+  // Todo fornecedor exceto a Piquiri usa um caminho diferente: a foto vai
+  // para um webhook n8n que chama o Gemini, em vez de ser processada aqui
+  // com Tesseract.
+  if (ocrFornecedorAtual === 'gemini') {
+    await processarFotoEtiquetaGemini(file);
+    return;
+  }
 
   try {
     const canvasFoto = await redimensionarImagem(file, 2600);
@@ -1128,9 +1136,10 @@ async function processarFotoEtiqueta(event, fornecedorOcr) {
     // a região exata de um campo mal lido e reler só aquele pedaço.
     // PSM 6 (bloco uniforme de texto) lê a etiqueta Novacki bem melhor que o
     // modo 4 padrão, que some com a linha de rótulos LARGURA/DIÂMETRO/CÓDIGO.
-    if (ocrFornecedorAtual === 'novacki') await worker.setParameters({ tessedit_pageseg_mode: '6' });
+    const usaPsm6 = ocrFornecedorAtual === 'novacki';
+    if (usaPsm6) await worker.setParameters({ tessedit_pageseg_mode: '6' });
     const resultado = await worker.recognize(canvasFoto, {}, { text: true, blocks: true });
-    if (ocrFornecedorAtual === 'novacki') await worker.setParameters({ tessedit_pageseg_mode: '4' });
+    if (usaPsm6) await worker.setParameters({ tessedit_pageseg_mode: '4' });
     const texto = (resultado && resultado.data && resultado.data.text) || '';
 
     let dados, debugReleitura;
@@ -1690,8 +1699,68 @@ async function relerCamposNovacki(worker, canvasFoto, data, dados) {
   return debug;
 }
 
+// ==================== OCR ETIQUETA GENÉRICA (via n8n + Gemini) ====================
+// Vale para todo fornecedor exceto a Piquiri (layout fixo, lido no próprio
+// aparelho). A fonte numérica da etiqueta Porto se mostrou difícil demais para o
+// Tesseract (testado exaustivamente: múltiplos modos de segmentação,
+// escalas, binarização — ficou em ~40% de acerto mesmo em recortes
+// perfeitamente nítidos). Em vez disso, a foto é enviada para um workflow
+// n8n que chama o Gemini (bem melhor em leitura de texto de imagem) e
+// devolve os campos já estruturados.
+//
+// O n8n roda na VPS e é exposto via Cloudflare Tunnel em n8n.mcamargo.uk.
+// O nome do fornecedor segue no payload para o prompt do Gemini se adaptar.
+const PORTO_WEBHOOK_URL = 'https://n8n.mcamargo.uk/webhook/leitor-etiqueta-porto';
+
+async function processarFotoEtiquetaGemini(file) {
+  try {
+    if (PORTO_WEBHOOK_URL.includes('SEU-N8N')) {
+      throw new Error('Configure a URL do webhook n8n em PORTO_WEBHOOK_URL antes de usar.');
+    }
+
+    document.getElementById('ocrStatus').textContent =
+      '📤 Enviando etiqueta para leitura...\n(pode levar alguns segundos)';
+
+    // Reaproveita o mesmo redimensionamento usado pela Novacki/Piquiri; o
+    // Gemini não precisa de tanta resolução quanto o Tesseract, então um
+    // teto menor mantém o upload rápido em conexão de almoxarifado/celular.
+    const canvasFoto = await redimensionarImagem(file, 1600);
+    const imagemBase64 = canvasFoto.toDataURL('image/jpeg', 0.85);
+
+    const resposta = await fetch(PORTO_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imagem: imagemBase64,
+        fornecedor: document.getElementById('fornecedor').value.trim(),
+      }),
+    });
+    if (!resposta.ok) throw new Error('O servidor respondeu ' + resposta.status);
+    const dados = await resposta.json();
+
+    document.getElementById('ocrNotaFiscal').value    = dados.notaFiscal || '';
+    document.getElementById('ocrCodFornecedor').value = dados.codFornecedor || '';
+    document.getElementById('ocrTipo').value          = dados.tipo || '';
+    document.getElementById('ocrFormato').value       = dados.formato || '';
+    document.getElementById('ocrDiametro').value      = dados.diametro || '';
+    document.getElementById('ocrGramatura').value     = dados.gramatura || '';
+    document.getElementById('ocrPeso').value          = dados.peso || '';
+    document.getElementById('ocrQuantidade').value    = 1;
+    document.getElementById('ocrTextoBruto').textContent = JSON.stringify(dados, null, 2);
+
+    document.getElementById('ocrStatus').style.display = 'none';
+    document.getElementById('ocrCampos').style.display = 'block';
+  } catch (err) {
+    document.getElementById('ocrStatus').textContent =
+      '⚠ Erro ao enviar/ler a etiqueta.\nVerifique sua internet e tente novamente.\n' +
+      (err && err.message ? err.message : '');
+  }
+}
+
 function confirmarSalvarOcr() {
-  const ehNovacki  = ocrFornecedorAtual === 'novacki';
+  const ehGemini   = ocrFornecedorAtual === 'gemini';
+  const nomeForn   = document.getElementById('fornecedor').value.trim();
+  const tipoVaria  = ehGemini; // Piquiri é sempre Capa; as outras variam
   const notaFiscal = document.getElementById('ocrNotaFiscal').value.trim();
   const cod        = document.getElementById('ocrCodFornecedor').value.trim();
   const tipoSel    = document.getElementById('ocrTipo').value;
@@ -1701,16 +1770,16 @@ function confirmarSalvarOcr() {
   const peso       = document.getElementById('ocrPeso').value.trim();
   const qtd        = parseInt(document.getElementById('ocrQuantidade').value) || 1;
 
-  if (ehNovacki && !tipoSel) {
+  if (tipoVaria && !tipoSel) {
     alert('⚠ Selecione o Tipo (Capa ou Miolo) antes de salvar!');
     return;
   }
 
   const faltando = [];
-  // Novacki não imprime Nota Fiscal na etiqueta — só o Cód. Fornecedor
-  // (CÓDIGO) identifica a bobina, então não faz sentido cobrar a NF aqui.
-  if (!ehNovacki && !notaFiscal) faltando.push('Nota Fiscal');
-  if (ehNovacki && !cod)         faltando.push('Cód. Fornecedor');
+  // Só a Piquiri sempre traz a NF na etiqueta (e é o que a identifica); nas
+  // demais (ex.: Novacki) a NF pode nem existir, então só o código é cobrado.
+  if (!ehGemini && !notaFiscal)  faltando.push('Nota Fiscal');
+  if (ehGemini && !cod) faltando.push('Cód. Fornecedor');
   if (!fmt_)  faltando.push('Formato');
   if (!diam)  faltando.push('Diâmetro');
   if (!gram)  faltando.push('Gramatura');
@@ -1724,16 +1793,16 @@ function confirmarSalvarOcr() {
     if (!continuar) return;
   }
 
-  // Piquiri não tem código próprio: usa o nº da NF. Novacki é o contrário —
-  // tem CÓDIGO próprio impresso e não tem NF na etiqueta.
-  const codFinal = ehNovacki ? cod : (cod || notaFiscal);
-  const fornecedorFinal = ehNovacki ? 'Novacki' : 'Piquiri';
-  const tipoFinal = ehNovacki ? tipoSel : 'Capa';
+  // Piquiri não tem código próprio: usa o nº da NF. As demais têm código
+  // próprio impresso na etiqueta.
+  const codFinal = ehGemini ? cod : (cod || notaFiscal);
+  const fornecedorFinal = ehGemini ? (nomeForn || 'Outro') : 'Piquiri';
+  const tipoFinal = tipoVaria ? tipoSel : 'Capa';
 
   for (let i = 0; i < qtd; i++) {
     bobinas.push({
       id: Date.now() + i,
-      notaFiscal: ehNovacki ? '' : notaFiscal,
+      notaFiscal: notaFiscal,
       codFornecedor: codFinal,
       fornecedor: fornecedorFinal,
       tipo: tipoFinal,
