@@ -1736,7 +1736,10 @@ async function processarFotoEtiquetaGemini(file) {
       }),
     });
     if (!resposta.ok) throw new Error('O servidor respondeu ' + resposta.status);
-    const dados = await resposta.json();
+    const textoResp = await resposta.text();
+    let dados;
+    try { dados = JSON.parse(textoResp); }
+    catch (e) { throw new Error('A leitura automática está indisponível no momento. Tente de novo em instantes ou preencha os campos manualmente.'); }
 
     document.getElementById('ocrNotaFiscal').value    = dados.notaFiscal || '';
     document.getElementById('ocrCodFornecedor').value = dados.codFornecedor || '';
