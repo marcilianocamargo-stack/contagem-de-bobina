@@ -218,6 +218,33 @@ select:focus, input:focus {
 .total-bar .t-lbl { font-size: 13px; color: #388e3c; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
 .total-bar .t-num { font-size: 28px; font-weight: 900; color: #2e7d32; line-height: 1.1; }
 
+.sugestao-peso {
+  margin-top: 12px;
+  background: #fff8e1;
+  border: 2px solid #f0b400;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 16px;
+  color: #5d4200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sugestao-peso b { font-size: 20px; }
+.sugestao-peso small { display: block; font-size: 12px; color: #7a6320; margin-top: 2px; }
+.sugestao-peso button {
+  margin-left: auto;
+  background: #f0b400;
+  color: #3d2c00;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-weight: 800;
+  font-size: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.bi-estimado { display: block; font-size: 11px; font-weight: 700; color: #b26a00; text-align: right; }
 .msg {
   border-radius: 12px;
   padding: 14px 16px;
@@ -336,6 +363,7 @@ select:focus, input:focus {
       <option value="Klabin">
       <option value="Suzano">
       <option value="Klingele">
+      <option value="Prime">
     </datalist>
 
     <div id="wrapOcrPiquiri" style="display:none">
@@ -388,6 +416,9 @@ select:focus, input:focus {
           onkeydown="if(event.key==='Enter'){salvarBobina();}">
       </div>
     </div>
+
+    <!-- Bobina sem etiqueta: peso estimado pela largura e diâmetro -->
+    <div id="sugestaoPeso" class="sugestao-peso" style="display:none"></div>
 
     <button class="btn btn-verde" id="btnSalvar" onclick="salvarBobina()">✓&nbsp;&nbsp;SALVAR BOBINA</button>
     <div class="msg" id="msgBobina"></div>
@@ -490,7 +521,7 @@ select:focus, input:focus {
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v23';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('versaoApp');
   if (el) el.textContent = 'Versão ' + APP_VERSION;
@@ -582,6 +613,94 @@ function aoDigitarFornecedor() {
   }
 }
 
+// ── Estimativa de peso (bobina sem etiqueta) ─────────────────────────────
+// peso = densidade × volume, com volume = π/4 × (Ø² − tubete²) × largura.
+// Densidades (kg/m³) calibradas em 30/09/2026 com o estoque real (Controle
+// Estoque.xlsm e Estoque_Bobinas_15-07-2026.xlsx) e etiquetas lidas: nas 243
+// bobinas Piquiri com peso de balança o erro mediano foi 1,2% (90% até 5%).
+// A gramatura quase não muda a densidade (Piquiri de 100 a 130 g/m² deu
+// 677–685). Tocos ficaram fora da calibração: os pesos deles eram estimados à mão.
+const TUBETE_M = 0.12;
+const DENSIDADE_FORNECEDOR = {
+  piquiri:   { rho: 682, base: 'densidade de 243 bobinas Piquiri' },
+  paraibuna: { rho: 771, base: 'densidade de 4 bobinas Paraibuna Branco', tipo: 'Branco' },
+  novacki:   { rho: 694, base: 'densidade de 2 etiquetas Novacki' },
+  klingele:  { rho: 778, base: 'densidade de 2 etiquetas Klingele' },
+};
+const DENSIDADE_BRANCO = { rho: 771, base: 'densidade de papel branco (Paraibuna)' };
+const DENSIDADE_PADRAO = { rho: 686, base: 'densidade média Piquiri/Novacki' };
+
+function volumeBobina(formatoMm, diametroMm) {
+  const D = diametroMm / 1000, L = formatoMm / 1000;
+  return Math.PI / 4 * (D * D - TUBETE_M * TUBETE_M) * L;
+}
+
+function chaveFornecedor(nome) {
+  return semAcento(nome).split(/\s+/)[0] || '';
+}
+
+// Bobinas desta contagem com peso real (etiqueta/balança) são a referência
+// mais fresca: com 3 ou mais do mesmo fornecedor, usa a mediana delas.
+function densidadeReferencia(fornecedor, tipo) {
+  const chave = chaveFornecedor(fornecedor);
+  const branco = tipo === 'Branco';
+  const amostras = bobinas
+    .filter(b => !b.pesoEstimado && b.peso > 0 && b.formato > 0 && b.diametro > 200
+      && chaveFornecedor(b.fornecedor) === chave && (b.tipo === 'Branco') === branco)
+    .map(b => b.peso / volumeBobina(b.formato, b.diametro))
+    .filter(r => r > 500 && r < 950)
+    .sort((a, b) => a - b);
+  if (chave && amostras.length >= 3) {
+    return {
+      rho: amostras[Math.floor(amostras.length / 2)],
+      base: 'densidade de ' + amostras.length + ' bobinas ' + fornecedor + ' desta contagem',
+    };
+  }
+  const ref = DENSIDADE_FORNECEDOR[chave];
+  if (ref && (!ref.tipo || ref.tipo === tipo)) return ref;
+  return branco ? DENSIDADE_BRANCO : DENSIDADE_PADRAO;
+}
+
+function estimarPeso(fornecedor, tipo, formatoMm, diametroMm) {
+  if (!(formatoMm > 0) || !(diametroMm > TUBETE_M * 1000 + 50)) return null;
+  const ref = densidadeReferencia(fornecedor, tipo);
+  return { peso: Math.round(ref.rho * volumeBobina(formatoMm, diametroMm)), rho: Math.round(ref.rho), base: ref.base };
+}
+
+function atualizarSugestaoPeso() {
+  const caixa = document.getElementById('sugestaoPeso');
+  const pesoDigitado = document.getElementById('peso').value.trim();
+  const formato = parseFloat(document.getElementById('formato').value);
+  const diametro = parseFloat(document.getElementById('diametro').value);
+  if (pesoDigitado || !(formato > 0)) { caixa.style.display = 'none'; return; }
+  const est = estimarPeso(document.getElementById('fornecedor').value.trim(),
+    document.getElementById('tipo').value, formato, diametro);
+  if (!est) {
+    caixa.innerHTML = '<div>💡 Sem etiqueta? Informe o <b style="font-size:inherit">diâmetro</b> para estimar o peso.</div>';
+  } else {
+    caixa.innerHTML = '<div>💡 Sem etiqueta? Peso estimado: <b>' + est.peso.toLocaleString('pt-BR') + ' kg</b>' +
+      '<small>' + esc(est.base) + ' (' + est.rho + ' kg/m³) · erro típico até ±5%</small></div>' +
+      '<button type="button" onclick="usarPesoEstimado(' + est.peso + ')">USAR</button>';
+  }
+  caixa.style.display = 'flex';
+}
+
+function usarPesoEstimado(valor) {
+  const campo = document.getElementById('peso');
+  campo.value = valor;
+  // Marca o valor como estimado; se o operador digitar outro peso, a marca some.
+  campo.dataset.estimado = String(valor);
+  document.getElementById('sugestaoPeso').style.display = 'none';
+}
+
+['fornecedor', 'tipo', 'formato', 'diametro', 'peso'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener(id === 'tipo' ? 'change' : 'input', () => {
+    if (id === 'peso') delete el.dataset.estimado;
+    atualizarSugestaoPeso();
+  });
+});
+
 function salvarBobina() {
   const notaFiscal = document.getElementById('notaFiscal').value.trim();
   const cod   = document.getElementById('codFornecedor').value.trim();
@@ -598,14 +717,28 @@ function salvarBobina() {
   if (!tipo)  { mostrarMsg('⚠ Selecione o Tipo!', 'err');      document.getElementById('tipo').focus(); return; }
   if (!qtd || qtd < 1) { mostrarMsg('⚠ Quantidade inválida!', 'err'); document.getElementById('quantidade').focus(); return; }
 
+  // Sem peso, mas com largura e diâmetro: bobina sem etiqueta → peso estimado.
+  let pesoFinal = peso ? parseFloat(peso) : 0;
+  let pesoEstimado = !!pesoFinal && document.getElementById('peso').dataset.estimado === peso;
+  const est = pesoFinal > 0 ? null : estimarPeso(forn, tipo, parseFloat(fmt_), parseFloat(diam));
+
   // Campos em branco são permitidos (etiqueta sem dados) após confirmação
   const faltando = [];
-  if (!notaFiscal) faltando.push('Nota Fiscal');
+  if (!notaFiscal && !est && !pesoEstimado) faltando.push('Nota Fiscal');
   if (!fmt_)       faltando.push('Formato');
   if (!diam)       faltando.push('Diâmetro');
   if (!gram)       faltando.push('Gramatura');
-  if (!peso || parseFloat(peso) <= 0) faltando.push('Peso');
-  if (faltando.length > 0) {
+  if (!pesoFinal && !est) faltando.push('Peso');
+  if (est) {
+    const ok = confirm(
+      'Bobina sem etiqueta: salvar com peso ESTIMADO de ' + est.peso + ' kg?\n' +
+      '(' + est.base + ', erro típico até ±5%)' +
+      (faltando.length ? '\n\nEm branco: ' + faltando.join(', ') : '')
+    );
+    if (!ok) return;
+    pesoFinal = est.peso;
+    pesoEstimado = true;
+  } else if (faltando.length > 0) {
     const continuar = confirm(
       'Os seguintes campos estão em branco e ficarão sem valor:\n' +
       faltando.join(', ') + '\n\nDeseja salvar assim mesmo?'
@@ -627,16 +760,18 @@ function salvarBobina() {
       formato: fmt_ ? parseFloat(fmt_) : 0,
       diametro: diam ? parseFloat(diam) : 0,
       gramatura: gram ? parseFloat(gram) : 0,
-      peso: peso ? parseFloat(peso) : 0,
+      peso: pesoFinal,
+      ...(pesoEstimado ? { pesoEstimado: true } : {}),
     });
   }
 
   salvarLocal();
   limparFormulario();
   renderLista();
+  const txtPeso = (pesoEstimado ? '≈ ' : '') + fmt(pesoFinal) + ' kg' + (pesoEstimado ? ' (estimado)' : '');
   mostrarFlash(qtd > 1
-    ? '✓ ' + qtd + ' Bobinas Salvas!\n' + forn + ' · ' + fmt(peso ? parseFloat(peso) : 0) + ' kg cada'
-    : '✓ Bobina Salva!\n' + forn + ' · ' + fmt(peso ? parseFloat(peso) : 0) + ' kg');
+    ? '✓ ' + qtd + ' Bobinas Salvas!\n' + forn + ' · ' + txtPeso + ' cada'
+    : '✓ Bobina Salva!\n' + forn + ' · ' + txtPeso);
   setTimeout(() => document.getElementById('codFornecedor').focus(), 80);
 }
 
@@ -650,6 +785,8 @@ function limparFormulario() {
     el.value = '';
   });
   document.getElementById('quantidade').value = '1';
+  delete document.getElementById('peso').dataset.estimado;
+  document.getElementById('sugestaoPeso').style.display = 'none';
   document.getElementById('wrapTipo').style.display = 'block';
   document.getElementById('wrapOcrPiquiri').style.display = 'none';
   document.getElementById('wrapOcrGemini').style.display = 'block';
@@ -694,7 +831,7 @@ function renderLista() {
         </div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0">
-        <div class="bi-peso">${fmt(b.peso)} kg</div>
+        <div class="bi-peso">${b.pesoEstimado ? '≈ ' : ''}${fmt(b.peso)} kg${b.pesoEstimado ? '<span class="bi-estimado">estimado</span>' : ''}</div>
         <button class="bi-del" onclick="removerBobina(${b.id})">✕</button>
       </div>
     </div>
@@ -744,6 +881,7 @@ async function gerarExcel() {
     { header: 'Diâmetro (mm)', width: 14 },
     { header: 'Gramatura (g/m²)', width: 16 },
     { header: 'Peso (kg)', width: 12 },
+    { header: 'Peso estimado', width: 12 },
   ];
   const headerEst = wsEst.getRow(1);
   headerEst.height = 30;
@@ -755,7 +893,7 @@ async function gerarExcel() {
   });
 
   bobinas.forEach((b, i) => {
-    const row = wsEst.addRow([celVal(b.notaFiscal), celVal(b.codFornecedor), b.fornecedor, b.tipo, celVal(b.formato), celVal(b.diametro), celVal(b.gramatura), celVal(b.peso)]);
+    const row = wsEst.addRow([celVal(b.notaFiscal), celVal(b.codFornecedor), b.fornecedor, b.tipo, celVal(b.formato), celVal(b.diametro), celVal(b.gramatura), celVal(b.peso), b.pesoEstimado ? 'Sim' : '']);
     const faixa = (i % 2 === 1) ? COR_ZEBRA : null;
     row.eachCell(cell => {
       cell.font = { size: 10, name: 'Arial', color: { argb: 'FF000000' } };
